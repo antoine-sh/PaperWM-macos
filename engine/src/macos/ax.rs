@@ -5,11 +5,12 @@ use std::ptr;
 
 use accessibility_sys::{
     kAXErrorAPIDisabled, kAXErrorCannotComplete, kAXErrorInvalidUIElement, kAXErrorSuccess, kAXValueTypeCGPoint,
-    kAXValueTypeCGSize, AXError, AXUIElementCopyAttributeValue, AXUIElementCreateApplication,
-    AXUIElementCreateSystemWide, AXUIElementGetPid, AXUIElementGetTypeID, AXUIElementPerformAction, AXUIElementRef,
-    AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout, AXValueCreate, AXValueGetTypeID, AXValueGetValue,
-    AXValueRef, AXValueType,
+    kAXValueTypeCGSize, AXError, AXUIElementCopyAttributeValue, AXUIElementCopyMultipleAttributeValues,
+    AXUIElementCreateApplication, AXUIElementCreateSystemWide, AXUIElementGetPid, AXUIElementGetTypeID,
+    AXUIElementPerformAction, AXUIElementRef, AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout,
+    AXValueCreate, AXValueGetTypeID, AXValueGetValue, AXValueRef, AXValueType,
 };
+use core_foundation::array::CFArray;
 use core_foundation::base::{CFType, TCFType};
 use core_foundation::string::CFString;
 use core_foundation_sys::array::{CFArrayGetCount, CFArrayGetTypeID, CFArrayGetValueAtIndex, CFArrayRef};
@@ -80,21 +81,26 @@ impl AxElement {
         Ok(unsafe { CFType::wrap_under_create_rule(value) })
     }
 
-    pub fn string(&self, attribute: &'static str) -> Option<String> {
-        let value = self.copy(attribute).ok()?;
-        if unsafe { CFGetTypeID(value.as_CFTypeRef()) } != unsafe { CFStringGetTypeID() } {
-            return None;
+    /// Several attributes in one round trip to the app, in the order asked
+    /// for; attributes the window lacks come back as `None`.
+    pub fn values(&self, attributes: &[&'static str]) -> Result<Vec<Option<CFType>>, AXError> {
+        let names: Vec<CFString> = attributes.iter().map(|a| CFString::from_static_string(a)).collect();
+        let names = CFArray::from_CFTypes(&names);
+        let mut values: CFArrayRef = ptr::null();
+        // Without StopOnError, a missing attribute fails alone, as an AXValue
+        // holding its error, instead of failing the whole call.
+        let err =
+            unsafe { AXUIElementCopyMultipleAttributeValues(self.0, names.as_concrete_TypeRef(), 0, &mut values) };
+        if err != kAXErrorSuccess {
+            return Err(err);
         }
-        let s = unsafe { CFString::wrap_under_get_rule(value.as_CFTypeRef().cast()) };
-        Some(s.to_string())
-    }
-
-    pub fn bool(&self, attribute: &'static str) -> Option<bool> {
-        let value = self.copy(attribute).ok()?;
-        if unsafe { CFGetTypeID(value.as_CFTypeRef()) } != unsafe { CFBooleanGetTypeID() } {
-            return None;
+        if values.is_null() {
+            return Err(kAXErrorCannotComplete);
         }
-        Some(value.as_CFTypeRef() == unsafe { kCFBooleanTrue } as CFTypeRef)
+        let values: CFArray<CFType> = unsafe { CFArray::wrap_under_create_rule(values) };
+        let mut result: Vec<Option<CFType>> = values.iter().map(|v| Some(v.clone())).collect();
+        result.resize(attributes.len(), None);
+        Ok(result)
     }
 
     /// An element-valued attribute such as `AXFocusedWindow`.
@@ -126,25 +132,6 @@ impl AxElement {
         } else {
             Err(err)
         }
-    }
-
-    fn ax_value<T: Default>(&self, attribute: &'static str, kind: AXValueType) -> Option<T> {
-        let value = self.copy(attribute).ok()?;
-        let raw = value.as_CFTypeRef();
-        if unsafe { CFGetTypeID(raw) } != unsafe { AXValueGetTypeID() } {
-            return None;
-        }
-        let mut out = T::default();
-        let ok = unsafe { AXValueGetValue(raw as AXValueRef, kind, (&mut out as *mut T).cast::<c_void>()) };
-        ok.then_some(out)
-    }
-
-    pub fn point(&self, attribute: &'static str) -> Option<Point> {
-        self.ax_value(attribute, kAXValueTypeCGPoint)
-    }
-
-    pub fn size(&self, attribute: &'static str) -> Option<Size> {
-        self.ax_value(attribute, kAXValueTypeCGSize)
     }
 
     fn set_ax_value<T>(&self, attribute: &'static str, kind: AXValueType, value: &T) -> Result<(), AXError> {
@@ -200,6 +187,41 @@ impl Drop for AxElement {
     fn drop(&mut self) {
         unsafe { CFRelease(self.0 as CFTypeRef) };
     }
+}
+
+pub fn as_string(value: &CFType) -> Option<String> {
+    if unsafe { CFGetTypeID(value.as_CFTypeRef()) } != unsafe { CFStringGetTypeID() } {
+        return None;
+    }
+    let s = unsafe { CFString::wrap_under_get_rule(value.as_CFTypeRef().cast()) };
+    Some(s.to_string())
+}
+
+pub fn as_bool(value: &CFType) -> Option<bool> {
+    if unsafe { CFGetTypeID(value.as_CFTypeRef()) } != unsafe { CFBooleanGetTypeID() } {
+        return None;
+    }
+    Some(value.as_CFTypeRef() == unsafe { kCFBooleanTrue } as CFTypeRef)
+}
+
+pub fn as_point(value: &CFType) -> Option<Point> {
+    ax_value(value, kAXValueTypeCGPoint)
+}
+
+pub fn as_size(value: &CFType) -> Option<Size> {
+    ax_value(value, kAXValueTypeCGSize)
+}
+
+/// The contents of an `AXValue` of type `kind`. An attribute that failed in
+/// [`AxElement::values`] holds an error instead, which reads as `None`.
+fn ax_value<T: Default>(value: &CFType, kind: AXValueType) -> Option<T> {
+    let raw = value.as_CFTypeRef();
+    if unsafe { CFGetTypeID(raw) } != unsafe { AXValueGetTypeID() } {
+        return None;
+    }
+    let mut out = T::default();
+    let ok = unsafe { AXValueGetValue(raw as AXValueRef, kind, (&mut out as *mut T).cast::<c_void>()) };
+    ok.then_some(out)
 }
 
 // The AX error constants are lower-case Apple names.
