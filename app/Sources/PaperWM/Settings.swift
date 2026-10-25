@@ -1,5 +1,12 @@
 import Foundation
 
+enum MinimapStyle: String, Codable {
+    /// The strip with each window as a box, in the middle of the screen.
+    case strip
+    /// A row of app icons at the bottom of the screen.
+    case toolbar
+}
+
 /// The user's preferences, stored as JSON in `UserDefaults`.
 @MainActor
 final class Settings: ObservableObject {
@@ -19,6 +26,7 @@ final class Settings: ObservableObject {
         var dimBackground = false
         /// Opacity of the dim, 0–1.
         var dimAmount = 0.3
+        var minimapStyle: MinimapStyle = .toolbar
 
         init() {}
 
@@ -35,6 +43,7 @@ final class Settings: ObservableObject {
             borderWidth = try c.decodeIfPresent(Double.self, forKey: .borderWidth) ?? defaults.borderWidth
             dimBackground = try c.decodeIfPresent(Bool.self, forKey: .dimBackground) ?? defaults.dimBackground
             dimAmount = try c.decodeIfPresent(Double.self, forKey: .dimAmount) ?? defaults.dimAmount
+            minimapStyle = try c.decodeIfPresent(MinimapStyle.self, forKey: .minimapStyle) ?? defaults.minimapStyle
             workspaceNames += defaults.workspaceNames.dropFirst(workspaceNames.count)
         }
     }
