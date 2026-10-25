@@ -10,7 +10,7 @@ use crate::applier::FrameApplier;
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
 use crate::geometry::{Point, Rect};
 use crate::placement;
-use crate::workspace::Workspace;
+use crate::workspace::{CenterFocus, Workspace};
 
 /// Number of PaperWM workspaces.
 pub const WORKSPACE_COUNT: usize = 9;
@@ -26,6 +26,8 @@ pub struct Config {
     pub workspace_names: Vec<String>,
     /// Seconds the strip takes to slide to a new scroll position; 0 jumps.
     pub animation_duration: f64,
+    /// When the focused column is kept centred.
+    pub center_focused: CenterFocus,
 }
 
 impl Default for Config {
@@ -35,6 +37,7 @@ impl Default for Config {
             width_presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0],
             workspace_names: (1..=WORKSPACE_COUNT).map(|i| i.to_string()).collect(),
             animation_duration: 0.25,
+            center_focused: CenterFocus::Never,
         }
     }
 }
@@ -277,7 +280,7 @@ impl Engine {
     /// Replaces the settings, laying windows out again only when a setting
     /// that affects the layout changed.
     pub fn set_config(&mut self, config: Config) -> Result<()> {
-        let relayout = config.gap != self.config.gap;
+        let relayout = config.gap != self.config.gap || config.center_focused != self.config.center_focused;
         let resnap = relayout || config.animation_duration != self.config.animation_duration;
         self.config = config;
         if relayout {
@@ -437,10 +440,27 @@ impl Engine {
         let mut new: Vec<(WindowId, Rect)> =
             self.info.values().filter(|w| !managed.contains(&w.id)).map(|w| (w.id, w.frame)).collect();
         new.sort_by(|a, b| a.1.x.total_cmp(&b.1.x).then(a.0.cmp(&b.0)));
+        // Only the frontmost app's windows take focus; a window popped up by
+        // an app in the background opens beside the focused column without
+        // moving focus or the strip.
+        let front = if new.is_empty() { None } else { self.backend.focused_app() };
+        // The window each touched workspace keeps focused.
+        let mut keep: HashMap<usize, Option<WindowId>> = HashMap::new();
         for (id, frame) in new {
             let monitor = self.monitor_at(frame).unwrap_or(self.active);
             let viewport = self.viewport(monitor);
-            self.workspaces[self.monitors[monitor].workspace].insert_window(id, frame.width, viewport);
+            let index = self.monitors[monitor].workspace;
+            let ws = &mut self.workspaces[index];
+            let kept = keep.entry(index).or_insert(ws.focused_window());
+            ws.insert_window(id, frame.width, viewport);
+            if front == Some(self.info[&id].pid) {
+                *kept = Some(id);
+            }
+        }
+        for (index, id) in keep {
+            if let Some(id) = id {
+                self.workspaces[index].focus_window(id);
+            }
         }
 
         if let Some(point) = drop {
@@ -553,13 +573,19 @@ impl Engine {
         if raise.is_empty() {
             raise.extend(after.filter(|&id| Some(id) != before));
         }
-        if after.is_none() && raise.is_empty() {
+        // A pan never hides or leaves a window, and arrives every frame.
+        if after.is_none() && raise.is_empty() && !matches!(command, Command::ScrollBy(_)) {
             // Nothing to focus here, so macOS keeps focus on a window we just
             // hid or left; following it on the next sync would undo this.
             self.stale_focus = self.backend.focused_window();
         }
-        for id in raise {
-            self.focus(id)?;
+        if !raise.is_empty() {
+            // Asked once: macOS moves focus asynchronously, so it would not
+            // have changed between raises anyway.
+            let previous = self.backend.focused_window();
+            for id in raise {
+                self.focus(id, previous)?;
+            }
         }
         Ok(changed)
     }
@@ -600,8 +626,8 @@ impl Engine {
         self.monitors.get(self.active).and_then(|m| self.workspaces[m.workspace].focused_window())
     }
 
-    fn focus(&mut self, id: WindowId) -> Result<()> {
-        let previous = self.backend.focused_window();
+    /// Focuses `id`; `previous` is the system focus before the engine moved it.
+    fn focus(&mut self, id: WindowId, previous: Option<WindowId>) -> Result<()> {
         match self.backend.focus(id) {
             Ok(()) => {
                 self.stale_focus = previous.filter(|&p| p != id);
@@ -799,7 +825,8 @@ impl Engine {
     fn ensure_visible_all(&mut self) {
         for i in 0..self.monitors.len() {
             let viewport = self.viewport(i);
-            self.workspaces[self.monitors[i].workspace].ensure_focused_visible(viewport, self.config.gap);
+            let ws = &mut self.workspaces[self.monitors[i].workspace];
+            ws.follow_focus(self.config.center_focused, viewport, self.config.gap);
         }
     }
 
@@ -880,6 +907,9 @@ mod tests {
         fn focused_window(&self) -> Option<WindowId> {
             self.0.focused_window()
         }
+        fn focused_app(&self) -> Option<i32> {
+            self.0.focused_app()
+        }
         fn focus(&self, id: WindowId) -> Result<()> {
             self.0.focus(id)
         }
@@ -942,6 +972,53 @@ mod tests {
         engine.sync().unwrap();
         assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
         assert_eq!(backend.frame_of(2).unwrap().x, 316.0);
+    }
+
+    #[test]
+    fn background_app_window_keeps_focus_and_scroll() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 600.0), window(2, 100.0, 600.0)]);
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        // Focus on a dialog, which does not pin the strip's focus.
+        backend.add(WindowInfo { pid: 101, is_standard: false, ..window(9, 300.0, 200.0) });
+        backend.set_focused(Some(9));
+        engine.sync().unwrap();
+        let scroll = engine.workspace(0).unwrap().scroll();
+        let frame = backend.frame_of(1);
+
+        // App 103 is not frontmost.
+        backend.add(window(3, 900.0, 600.0));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![2]]);
+        assert_eq!(engine.workspace(0).unwrap().focused_window(), Some(1));
+        assert_eq!(engine.workspace(0).unwrap().scroll(), scroll);
+        assert_eq!(backend.frame_of(1), frame);
+        assert_eq!(backend.focused_window(), Some(9));
+
+        // Two at once keep their left-to-right order.
+        backend.add(window(4, 300.0, 300.0));
+        backend.add(window(5, 200.0, 300.0));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![5], vec![4], vec![3], vec![2]]);
+        assert_eq!(engine.workspace(0).unwrap().focused_window(), Some(1));
+    }
+
+    #[test]
+    fn frontmost_app_window_takes_focus() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 600.0), window(2, 100.0, 600.0)]);
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        backend.add(WindowInfo { pid: 101, is_standard: false, ..window(9, 300.0, 200.0) });
+        backend.set_focused(Some(9));
+        engine.sync().unwrap();
+
+        // Same app as the focused dialog.
+        backend.add(WindowInfo { pid: 101, ..window(3, 900.0, 600.0) });
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![2]]);
+        assert_eq!(engine.workspace(0).unwrap().focused_window(), Some(3));
     }
 
     #[test]
@@ -1207,6 +1284,28 @@ mod tests {
     }
 
     #[test]
+    fn pans_and_raises_ask_for_focus_sparingly() {
+        let (mut engine, backend) = engine_with(vec![]);
+        engine.sync().unwrap();
+        let asked = backend.focus_queries();
+        for _ in 0..5 {
+            engine.command(Command::ScrollBy(5.0)).unwrap();
+        }
+        assert_eq!(backend.focus_queries(), asked);
+
+        let (mut engine, backend) = engine_with_scratch();
+        backend.add(window(3, 800.0, 300.0));
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        engine.command(Command::MoveToScratch).unwrap();
+        engine.command(Command::ToggleScratch).unwrap();
+        let asked = backend.focus_queries();
+        // Shows and raises both scratch windows.
+        assert_eq!(engine.command(Command::ToggleScratch), Ok(true));
+        assert_eq!(backend.focus_queries(), asked + 1);
+    }
+
+    #[test]
     fn move_to_scratch_floats_window_centered() {
         let (engine, backend) = engine_with_scratch();
         assert_eq!(columns(&engine), vec![vec![1]]);
@@ -1379,6 +1478,11 @@ mod tests {
         assert_eq!(Config::from_json("nope"), None);
         assert_eq!(Config::from_json(r#"{"gap":-3}"#), None);
         assert_eq!(Config::from_json(r#"{"animation_duration":-1}"#), None);
+        assert_eq!(
+            Config::from_json(r#"{"center_focused":"on_overflow"}"#).unwrap().center_focused,
+            CenterFocus::OnOverflow
+        );
+        assert_eq!(Config::from_json(r#"{"center_focused":"sometimes"}"#), None);
     }
 
     #[test]
@@ -1603,6 +1707,20 @@ mod tests {
         engine.set_config(config).unwrap();
         assert_eq!(backend.set_frame_calls(), calls);
         assert_eq!(engine.state().workspaces[0].name, "Mail");
+    }
+
+    #[test]
+    fn always_centring_keeps_the_focused_column_in_the_middle() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.set_config(Config { center_focused: CenterFocus::Always, ..engine.config().clone() }).unwrap();
+        engine.sync().unwrap();
+        let middle = |id| backend.frame_of(id).map(|f| f.x + f.width / 2.0);
+        let screen_middle = engine.monitors[0].area.x + engine.monitors[0].area.width / 2.0;
+        let focused = engine.focused_window().unwrap();
+        assert_eq!(middle(focused), Some(screen_middle));
+        engine.command(Command::FocusLeft).unwrap();
+        let focused = engine.focused_window().unwrap();
+        assert_eq!(middle(focused), Some(screen_middle));
     }
 
     #[test]
