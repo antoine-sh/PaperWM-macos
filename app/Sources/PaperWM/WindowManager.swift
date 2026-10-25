@@ -22,9 +22,11 @@ final class WindowManager {
     /// What was last applied, so settings edits only redo what changed.
     private var appliedConfig = ""
     private var appliedShortcuts: [KeyCombo] = []
-    /// Drives strip slides while one is running.
-    private var animationTimer: Timer?
+    /// Drives strip slides while one is running, once per display frame.
+    private lazy var frames = FrameDriver { [weak self] in self?.step() }
     private var lastTick: CFTimeInterval = 0
+    /// When each distinct error was last logged, to keep repeats out of the log.
+    private var lastLogged: [String: CFTimeInterval] = [:]
 
     func start() {
         let context = Unmanaged.passUnretained(self).toOpaque()
@@ -71,11 +73,17 @@ final class WindowManager {
         case .engine(PWM_COMMAND_TOGGLE_SCRATCH, _) where switcher.isOpen:
             // ⌃⌥Esc while switching cancels, as Esc does in PaperWM.
             switcher.cancel()
+        case .engine(PWM_COMMAND_SCROLL_BY, let arg):
+            // Pans arrive every frame: move the windows and the decorations,
+            // and leave the full update to the end of the pan.
+            report { try engine.run(PWM_COMMAND_SCROLL_BY, arg: arg) }
+            decorations.track()
         case .engine(let command, let arg):
-            report { try engine.run(command, arg: arg) }
-            // Redrawing the minimap for every scroll event is too costly; it
-            // shows when the pan ends.
-            if let state = publish(), command != PWM_COMMAND_SCROLL_BY {
+            var changed = false
+            report { changed = try engine.run(command, arg: arg) }
+            let state = publish()
+            // Focusing a picked window is not navigating the strip.
+            if let state, changed || command == PWM_COMMAND_SCROLL_END, command != PWM_COMMAND_FOCUS_WINDOW {
                 minimap.show(state, style: settings.values.minimapStyle)
             }
         case .switcher(let forward):
@@ -93,7 +101,6 @@ final class WindowManager {
         minimap.hide()
         if let id = switcher.commit() {
             perform(.engine(PWM_COMMAND_FOCUS_WINDOW, Double(id)))
-            minimap.hide()
         }
     }
 
@@ -115,33 +122,31 @@ final class WindowManager {
     @discardableResult
     private func publish() -> EngineState? {
         animate()
-        decorations.refresh()
-        guard let state = engine.state() else { return nil }
+        guard let state = engine.state() else {
+            decorations.refresh(focus: nil)
+            return nil
+        }
+        decorations.refresh(focus: state.focusedWindow)
         onStateChange?(state)
         return state
     }
 
     /// Ticks the engine every frame until the strips stop sliding.
     private func animate() {
-        guard animationTimer == nil, engine.tick(0) else { return }
+        guard !frames.isRunning, engine.isAnimating else { return }
         lastTick = CACurrentMediaTime()
-        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.step() }
-        }
-        RunLoop.main.add(timer, forMode: .common)
-        animationTimer = timer
+        frames.start()
     }
 
     private func step() {
         // Real elapsed time, so slow Accessibility calls skip frames instead
         // of stretching the slide.
         let now = CACurrentMediaTime()
-        let sliding = engine.tick(now - lastTick)
+        var sliding = false
+        report { sliding = try engine.tick(now - lastTick) }
         lastTick = now
-        if !sliding {
-            animationTimer?.invalidate()
-            animationTimer = nil
-        }
+        decorations.track()
+        if !sliding { frames.stop() }
     }
 
     /// Syncs on the next run loop turn, coalescing bursts of notifications.
@@ -159,6 +164,12 @@ final class WindowManager {
         publish()
     }
 
+    /// Puts every window back in its place, including ones that were moved.
+    func retile() {
+        report { try engine.retile() }
+        publish()
+    }
+
     private func updateMonitors() {
         report {
             try engine.setMonitors(NSScreen.screens.map(\.accessibilityVisibleFrame))
@@ -171,7 +182,14 @@ final class WindowManager {
         do {
             try body()
         } catch {
-            NSLog("PaperWM: \(error)")
+            // A failing call repeats on every frame of a slide or pan; log
+            // each distinct error at most every few seconds.
+            let message = String(describing: error)
+            let now = CACurrentMediaTime()
+            if now - (lastLogged[message] ?? -.infinity) >= 5 {
+                lastLogged[message] = now
+                NSLog("PaperWM: \(message)")
+            }
         }
     }
 
@@ -205,5 +223,46 @@ final class WindowManager {
 
     @objc private func screensChanged(_ notification: Notification) {
         updateMonitors()
+    }
+}
+
+/// Calls `onFrame` once per display refresh while running, so slides are as
+/// smooth as the display allows (120 Hz on ProMotion screens).
+@MainActor
+private final class FrameDriver: NSObject {
+    private let onFrame: () -> Void
+    private var link: CADisplayLink?
+    private var timer: Timer?
+
+    var isRunning: Bool { link != nil || timer != nil }
+
+    init(onFrame: @escaping () -> Void) {
+        self.onFrame = onFrame
+    }
+
+    func start() {
+        guard !isRunning else { return }
+        if let screen = NSScreen.main ?? NSScreen.screens.first {
+            let link = screen.displayLink(target: self, selector: #selector(frame(_:)))
+            link.add(to: .main, forMode: .common)
+            self.link = link
+        } else {
+            let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.onFrame() }
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+        }
+    }
+
+    func stop() {
+        link?.invalidate()
+        link = nil
+        timer?.invalidate()
+        timer = nil
+    }
+
+    @objc private func frame(_ link: CADisplayLink) {
+        onFrame()
     }
 }

@@ -13,9 +13,13 @@ struct EngineState: Decodable {
         /// Usable area in Accessibility coordinates.
         let area: Area
         let workspace: Int
+        /// Width of the strip's viewport: the area without the outer gaps.
+        let viewport: Double
     }
 
     struct Column: Decodable {
+        /// Strip x of the column's left edge.
+        let x: Double
         let width: Double
         let windows: [UInt32]
         let focusedRow: Int
@@ -33,6 +37,8 @@ struct EngineState: Decodable {
         let pid: Int32
         let appName: String
         let title: String
+        /// Where the engine put the window, in Accessibility coordinates.
+        let frame: Area
     }
 
     let activeMonitor: Int
@@ -44,13 +50,25 @@ struct EngineState: Decodable {
     let mru: [UInt32]
     let scratch: [UInt32]
     let scratchVisible: Bool
+    /// The window with keyboard focus, managed or not, if the engine knows it.
+    let focusedWindow: UInt32?
+    /// `windows` by id, filled in by `indexWindows`.
+    private var windowsByID: [UInt32: Window] = [:]
+
+    private enum CodingKeys: String, CodingKey {
+        case activeMonitor, gap, monitors, workspaces, windows, mru, scratch, scratchVisible, focusedWindow
+    }
 
     /// Index of the workspace on the active monitor.
     var activeWorkspace: Int? {
         monitors.indices.contains(activeMonitor) ? monitors[activeMonitor].workspace : nil
     }
 
+    mutating func indexWindows() {
+        windowsByID = Dictionary(windows.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
     func window(_ id: UInt32) -> Window? {
-        windows.first { $0.id == id }
+        windowsByID.isEmpty ? windows.first { $0.id == id } : windowsByID[id]
     }
 }

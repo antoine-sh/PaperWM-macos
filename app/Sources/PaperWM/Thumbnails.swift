@@ -1,4 +1,4 @@
-import CoreGraphics
+import AppKit
 import ScreenCaptureKit
 
 /// Window previews for the switcher. They need Screen Recording permission;
@@ -6,48 +6,79 @@ import ScreenCaptureKit
 enum Thumbnails {
     static var hasAccess: Bool { CGPreflightScreenCaptureAccess() }
 
-    /// Images of the windows `ids`, at most `maxSize` points on their long side.
-    static func capture(ids: [UInt32], maxSize: CGFloat) async -> [UInt32: CGImage] {
+    /// Captures the windows `ids`, at most `maxSize` points on their long
+    /// side, all at once, handing each image over as soon as it is ready.
+    static func capture(ids: [UInt32], maxSize: CGFloat,
+                        onImage: @escaping @MainActor (UInt32, CGImage) -> Void) async {
         guard hasAccess,
               let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
-        else { return [:] }
-        var images: [UInt32: CGImage] = [:]
-        for window in content.windows where ids.contains(window.windowID) {
-            let frame = window.frame
-            guard frame.width > 0, frame.height > 0 else { continue }
-            let scale = min(1, maxSize / max(frame.width, frame.height)) * 2
-            let configuration = SCStreamConfiguration()
-            configuration.width = Int(frame.width * scale)
-            configuration.height = Int(frame.height * scale)
-            configuration.showsCursor = false
-            let filter = SCContentFilter(desktopIndependentWindow: window)
-            if let image = try? await SCScreenshotManager.captureImage(contentFilter: filter,
-                                                                       configuration: configuration) {
-                images[window.windowID] = image
+        else { return }
+        let wanted = Set(ids)
+        await withTaskGroup(of: (UInt32, CGImage?).self) { group in
+            for window in content.windows where wanted.contains(window.windowID) {
+                let frame = window.frame
+                guard frame.width > 0, frame.height > 0 else { continue }
+                group.addTask {
+                    let scale = min(1, maxSize / max(frame.width, frame.height)) * 2
+                    let configuration = SCStreamConfiguration()
+                    configuration.width = Int(frame.width * scale)
+                    configuration.height = Int(frame.height * scale)
+                    configuration.showsCursor = false
+                    let filter = SCContentFilter(desktopIndependentWindow: window)
+                    let image = try? await SCScreenshotManager.captureImage(contentFilter: filter,
+                                                                            configuration: configuration)
+                    return (window.windowID, image)
+                }
+            }
+            for await (id, image) in group {
+                if Task.isCancelled {
+                    group.cancelAll()
+                    return
+                }
+                if let image { await onImage(id, image) }
             }
         }
-        return images
+    }
+}
+
+/// App icons by process, looked up once per app.
+@MainActor
+enum AppIcons {
+    private static var icons: [pid_t: NSImage] = [:]
+
+    static func icon(for pid: pid_t) -> NSImage? {
+        if let icon = icons[pid] { return icon }
+        guard let icon = NSRunningApplication(processIdentifier: pid)?.icon else { return nil }
+        if icons.count > 128 { icons.removeAll() }
+        icons[pid] = icon
+        return icon
     }
 }
 
 /// Measures how round a window's corners are, which differs between apps and
 /// macOS versions. Needs Screen Recording permission, like the previews.
 enum WindowCorners {
+    /// Side of the corner that is captured, in points.
+    private static let cornerSize: CGFloat = 64
+
     /// The radius in points, or nil without permission or a usable image.
     static func radius(of id: UInt32) async -> CGFloat? {
         guard Thumbnails.hasAccess,
               let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
               let window = content.windows.first(where: { $0.windowID == id }),
               window.frame.width > 0, window.frame.height > 0 else { return nil }
+        // Only the top-left corner matters, so only it is captured.
+        let side = min(cornerSize, window.frame.width, window.frame.height)
         let configuration = SCStreamConfiguration()
-        configuration.width = Int(window.frame.width * 2)
-        configuration.height = Int(window.frame.height * 2)
+        configuration.sourceRect = CGRect(x: 0, y: 0, width: side, height: side)
+        configuration.width = Int(side * 2)
+        configuration.height = Int(side * 2)
         configuration.showsCursor = false
         configuration.ignoreShadowsSingleWindow = true
         let filter = SCContentFilter(desktopIndependentWindow: window)
         guard let image = try? await SCScreenshotManager.captureImage(contentFilter: filter,
                                                                     configuration: configuration) else { return nil }
-        return radius(in: image, scale: CGFloat(image.width) / window.frame.width)
+        return radius(in: image, scale: CGFloat(image.width) / side)
     }
 
     /// Walks the top-left corner's diagonal to the first opaque pixel, which

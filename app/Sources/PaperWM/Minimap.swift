@@ -8,6 +8,10 @@ import SwiftUI
 final class Minimap {
     private let panel: NSPanel
     private var hideTimer: Timer?
+    /// Kept between showings so SwiftUI updates the views instead of building
+    /// them again every time.
+    private var strip: NSHostingView<StripView>?
+    private var toolbar: NSHostingView<ToolbarView>?
 
     init() {
         panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered,
@@ -28,11 +32,18 @@ final class Minimap {
         let screen = NSScreen.screens[state.activeMonitor]
         let monitor = state.monitors[state.activeMonitor]
         let visible = screen.visibleFrame
-        let hosting: NSView = switch style {
-        case .strip: NSHostingView(rootView: StripView(state: state, monitor: monitor, width: visible.width * 0.6))
-        case .toolbar: NSHostingView(rootView: ToolbarView(state: state, monitor: monitor, width: visible.width * 0.8))
+        let hosting: NSView
+        switch style {
+        case .strip:
+            let view = StripView(state: state, monitor: monitor, width: visible.width * 0.6)
+            if let strip { strip.rootView = view } else { strip = NSHostingView(rootView: view) }
+            hosting = strip!
+        case .toolbar:
+            let view = ToolbarView(state: state, monitor: monitor, width: visible.width * 0.8)
+            if let toolbar { toolbar.rootView = view } else { toolbar = NSHostingView(rootView: view) }
+            hosting = toolbar!
         }
-        panel.contentView = hosting
+        if panel.contentView !== hosting { panel.contentView = hosting }
         let size = hosting.fittingSize
         let y = switch style {
         case .strip: visible.maxY - visible.height / 3 - size.height / 2
@@ -56,7 +67,7 @@ final class Minimap {
 }
 
 /// The strip overview: each window as a box, with the viewport outlined.
-private struct StripView: View {
+struct StripView: View {
     let state: EngineState
     let monitor: EngineState.Monitor
     /// Width available for the strip.
@@ -66,18 +77,17 @@ private struct StripView: View {
 
     var body: some View {
         let workspace = state.workspaces[monitor.workspace]
-        let viewport = max(monitor.area.width - 2 * state.gap, 1)
-        let stripWidth = workspace.columns.reduce(0) { $0 + $1.width + state.gap } - state.gap
+        let viewport = monitor.viewport
+        let stripWidth = workspace.columns.last.map { $0.x + $0.width } ?? 0
         let scale = width / max(stripWidth, viewport)
 
         VStack(alignment: .leading, spacing: 8) {
             Text(workspace.name).font(.headline)
             ZStack(alignment: .topLeading) {
                 ForEach(Array(workspace.columns.enumerated()), id: \.offset) { index, column in
-                    let x = workspace.columns[..<index].reduce(0) { $0 + $1.width + state.gap }
                     columnView(column, focused: index == workspace.focusedColumn, scale: scale)
                         .frame(width: column.width * scale, height: stripHeight)
-                        .offset(x: x * scale)
+                        .offset(x: column.x * scale)
                 }
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(Color.white.opacity(0.8), lineWidth: 2)
@@ -113,7 +123,7 @@ private struct StripView: View {
 
 /// A row of app icons, one per column in strip order. The focused column is
 /// highlighted; columns scrolled out of view are dimmed.
-private struct ToolbarView: View {
+struct ToolbarView: View {
     let state: EngineState
     let monitor: EngineState.Monitor
     /// Widest the toolbar may grow.
@@ -147,7 +157,7 @@ private struct ToolbarView: View {
         let row = column.windows.indices.contains(column.focusedRow) ? column.focusedRow : 0
         let window = column.windows.isEmpty ? nil : state.window(column.windows[row])
         return Group {
-            if let pid = window?.pid, let image = NSRunningApplication(processIdentifier: pid)?.icon {
+            if let pid = window?.pid, let image = AppIcons.icon(for: pid) {
                 Image(nsImage: image).resizable()
             } else {
                 Image(systemName: "macwindow").resizable().padding(size / 6)
@@ -167,8 +177,7 @@ private struct ToolbarView: View {
     }
 
     private func isVisible(_ index: Int, in workspace: EngineState.Workspace) -> Bool {
-        let x = workspace.columns[..<index].reduce(0) { $0 + $1.width + state.gap }
-        let viewport = max(monitor.area.width - 2 * state.gap, 1)
-        return x + workspace.columns[index].width > workspace.scroll && x < workspace.scroll + viewport
+        let column = workspace.columns[index]
+        return column.x + column.width > workspace.scroll && column.x < workspace.scroll + monitor.viewport
     }
 }
