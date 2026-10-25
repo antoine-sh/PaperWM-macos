@@ -1,5 +1,6 @@
 import AppKit
 import ScreenCaptureKit
+import UniformTypeIdentifiers
 
 /// Window previews for the switcher. They need Screen Recording permission;
 /// without it every capture comes back empty and the switcher shows icons.
@@ -54,6 +55,21 @@ enum AppIcons {
         if icons.count > 128 { icons.removeAll() }
         icons[pid] = icon
         return icon
+    }
+
+    /// The icon of an app that may not be running.
+    static func icon(bundleID: String?, name: String) -> NSImage? {
+        if let bundleID, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
+            return NSWorkspace.shared.icon(forFile: url.path)
+        }
+        return NSWorkspace.shared.runningApplications.first { $0.localizedName == name }?.icon
+    }
+
+    /// A 16 pt copy of `icon`, or the generic app icon, for lists and menus.
+    static func small(_ icon: NSImage?) -> NSImage {
+        let image = (icon ?? NSWorkspace.shared.icon(for: .application)).copy() as! NSImage
+        image.size = NSSize(width: 16, height: 16)
+        return image
     }
 }
 
