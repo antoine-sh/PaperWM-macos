@@ -6,9 +6,12 @@ import CPaperWMEngine
 @MainActor
 final class WindowManager {
     let engine = Engine()
-    private(set) lazy var hotKeys = HotKeyCenter(hotKeys: HotKey.defaults) { [weak self] command in
-        self?.run(command)
+    let settings = Settings()
+    private(set) lazy var hotKeys = HotKeyCenter { [weak self] action in
+        self?.perform(action)
     }
+    /// Called with the new layout after every sync or command.
+    var onStateChange: ((EngineState) -> Void)?
     private var syncScheduled = false
 
     func start() {
@@ -34,8 +37,39 @@ final class WindowManager {
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             engine.observeApp(app.processIdentifier)
         }
+        settings.onChange = { [weak self] in self?.applySettings() }
+        report { try engine.setConfig(json: settings.engineConfigJSON) }
         updateMonitors()
-        hotKeys.register()
+        hotKeys.register(settings.hotKeys)
+    }
+
+    /// Pauses global shortcuts, e.g. while one is being recorded.
+    func setHotKeysPaused(_ paused: Bool) {
+        if paused {
+            hotKeys.unregisterAll()
+        } else {
+            hotKeys.register(settings.hotKeys)
+        }
+    }
+
+    func perform(_ action: Action) {
+        switch action {
+        case .engine(let command, let arg):
+            report { try engine.run(command, arg: arg) }
+            publish()
+        case .switcher:
+            break
+        }
+    }
+
+    private func applySettings() {
+        report { try engine.setConfig(json: settings.engineConfigJSON) }
+        hotKeys.register(settings.hotKeys)
+        publish()
+    }
+
+    private func publish() {
+        if let state = engine.state() { onStateChange?(state) }
     }
 
     /// Syncs on the next run loop turn, coalescing bursts of notifications.
@@ -50,10 +84,7 @@ final class WindowManager {
 
     func syncNow() {
         report { try engine.sync() }
-    }
-
-    private func run(_ command: PwmCommand) {
-        report { try engine.run(command) }
+        publish()
     }
 
     private func updateMonitors() {
@@ -61,6 +92,7 @@ final class WindowManager {
             try engine.setMonitors(NSScreen.screens.map(\.accessibilityVisibleFrame))
             try engine.sync()
         }
+        publish()
     }
 
     private func report(_ body: () throws -> Void) {
