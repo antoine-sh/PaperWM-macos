@@ -10,7 +10,7 @@ use crate::applier::FrameApplier;
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
 use crate::geometry::Rect;
 use crate::placement;
-use crate::workspace::Workspace;
+use crate::workspace::{CenterFocus, Workspace};
 
 /// Number of PaperWM workspaces.
 pub const WORKSPACE_COUNT: usize = 9;
@@ -26,6 +26,8 @@ pub struct Config {
     pub workspace_names: Vec<String>,
     /// Seconds the strip takes to slide to a new scroll position; 0 jumps.
     pub animation_duration: f64,
+    /// When the focused column is kept centred.
+    pub center_focused: CenterFocus,
 }
 
 impl Default for Config {
@@ -35,6 +37,7 @@ impl Default for Config {
             width_presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0],
             workspace_names: (1..=WORKSPACE_COUNT).map(|i| i.to_string()).collect(),
             animation_duration: 0.25,
+            center_focused: CenterFocus::Never,
         }
     }
 }
@@ -277,7 +280,7 @@ impl Engine {
     /// Replaces the settings, laying windows out again only when a setting
     /// that affects the layout changed.
     pub fn set_config(&mut self, config: Config) -> Result<()> {
-        let relayout = config.gap != self.config.gap;
+        let relayout = config.gap != self.config.gap || config.center_focused != self.config.center_focused;
         let resnap = relayout || config.animation_duration != self.config.animation_duration;
         self.config = config;
         if relayout {
@@ -754,7 +757,8 @@ impl Engine {
     fn ensure_visible_all(&mut self) {
         for i in 0..self.monitors.len() {
             let viewport = self.viewport(i);
-            self.workspaces[self.monitors[i].workspace].ensure_focused_visible(viewport, self.config.gap);
+            let ws = &mut self.workspaces[self.monitors[i].workspace];
+            ws.follow_focus(self.config.center_focused, viewport, self.config.gap);
         }
     }
 
@@ -1356,6 +1360,11 @@ mod tests {
         assert_eq!(Config::from_json("nope"), None);
         assert_eq!(Config::from_json(r#"{"gap":-3}"#), None);
         assert_eq!(Config::from_json(r#"{"animation_duration":-1}"#), None);
+        assert_eq!(
+            Config::from_json(r#"{"center_focused":"on_overflow"}"#).unwrap().center_focused,
+            CenterFocus::OnOverflow
+        );
+        assert_eq!(Config::from_json(r#"{"center_focused":"sometimes"}"#), None);
     }
 
     #[test]
@@ -1492,6 +1501,20 @@ mod tests {
         engine.set_config(config).unwrap();
         assert_eq!(backend.set_frame_calls(), calls);
         assert_eq!(engine.state().workspaces[0].name, "Mail");
+    }
+
+    #[test]
+    fn always_centring_keeps_the_focused_column_in_the_middle() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.set_config(Config { center_focused: CenterFocus::Always, ..engine.config().clone() }).unwrap();
+        engine.sync().unwrap();
+        let middle = |id| backend.frame_of(id).map(|f| f.x + f.width / 2.0);
+        let screen_middle = engine.monitors[0].area.x + engine.monitors[0].area.width / 2.0;
+        let focused = engine.focused_window().unwrap();
+        assert_eq!(middle(focused), Some(screen_middle));
+        engine.command(Command::FocusLeft).unwrap();
+        let focused = engine.focused_window().unwrap();
+        assert_eq!(middle(focused), Some(screen_middle));
     }
 
     #[test]

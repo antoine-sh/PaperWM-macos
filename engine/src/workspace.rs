@@ -49,6 +49,18 @@ pub struct Workspace {
     centered: bool,
 }
 
+/// When the strip scrolls to keep the focused column centred rather than
+/// just visible.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CenterFocus {
+    #[default]
+    Never,
+    /// Only while the strip is wider than the viewport.
+    OnOverflow,
+    Always,
+}
+
 /// Narrowest column the layout produces.
 pub const MIN_COLUMN_WIDTH: f64 = 100.0;
 
@@ -244,6 +256,20 @@ impl Workspace {
         }
         // Never leave empty space before the first column, e.g. after a pan.
         self.scroll = self.scroll.max(0.0);
+    }
+
+    /// Brings the focused column into view the way `mode` asks.
+    pub fn follow_focus(&mut self, mode: CenterFocus, viewport: f64, gap: f64) {
+        let center = match mode {
+            CenterFocus::Never => false,
+            CenterFocus::OnOverflow => self.strip_width(gap) > viewport,
+            CenterFocus::Always => !self.columns.is_empty(),
+        };
+        if center {
+            self.center_focused(viewport, gap);
+        } else {
+            self.ensure_focused_visible(viewport, gap);
+        }
     }
 
     pub fn center_focused(&mut self, viewport: f64, gap: f64) {
@@ -519,6 +545,27 @@ mod tests {
         ws.center_focused(VIEW, GAP);
         ws.focus_column(-2);
         ws.ensure_focused_visible(VIEW, GAP);
+        assert_eq!(ws.scroll(), 0.0);
+    }
+
+    #[test]
+    fn follow_focus_centres_as_configured() {
+        let mut ws = workspace(&[300.0, 300.0]);
+        ws.follow_focus(CenterFocus::Never, VIEW, GAP);
+        assert_eq!(ws.scroll(), 0.0);
+        ws.follow_focus(CenterFocus::OnOverflow, VIEW, GAP);
+        assert_eq!(ws.scroll(), 0.0);
+        ws.follow_focus(CenterFocus::Always, VIEW, GAP);
+        // Column 2 spans 310..610; its middle sits at the viewport's.
+        assert_eq!(ws.scroll(), 460.0 - VIEW / 2.0);
+
+        let mut ws = workspace(&[600.0, 600.0, 600.0]);
+        ws.focus_column(-1);
+        ws.follow_focus(CenterFocus::OnOverflow, VIEW, GAP);
+        assert_eq!(ws.scroll(), 910.0 - VIEW / 2.0);
+        // Once centring is off again, minimal scrolling takes over.
+        ws.focus_column(-1);
+        ws.follow_focus(CenterFocus::Never, VIEW, GAP);
         assert_eq!(ws.scroll(), 0.0);
     }
 
