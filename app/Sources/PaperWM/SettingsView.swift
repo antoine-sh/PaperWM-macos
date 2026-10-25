@@ -29,6 +29,10 @@ struct SettingsView: View {
                     if let presets = Self.parse(presetsText) { settings.values.widthPresets = presets }
                     presetsText = Self.format(settings.values.widthPresets)
                 }
+            Picker("Minimap", selection: $settings.values.minimapStyle) {
+                Text("Strip").tag(MinimapStyle.strip)
+                Text("App icon toolbar").tag(MinimapStyle.toolbar)
+            }
             Section("Workspace names") {
                 ForEach(0..<settings.values.workspaceNames.count, id: \.self) { index in
                     TextField("Workspace \(index + 1)", text: $settings.values.workspaceNames[index])
