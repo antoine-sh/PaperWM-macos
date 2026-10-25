@@ -128,6 +128,11 @@ impl WindowBackend for MockBackend {
         self.focused.get()
     }
 
+    fn focused_app(&self) -> Option<i32> {
+        let id = self.focused.get()?;
+        self.windows.borrow().iter().find(|w| w.id == id).map(|w| w.pid)
+    }
+
     fn focus(&self, id: WindowId) -> Result<()> {
         if !self.windows.borrow().iter().any(|w| w.id == id) {
             return Err(BackendError::WindowNotFound(id));
