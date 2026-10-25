@@ -21,6 +21,9 @@ final class WindowManager {
     /// What was last applied, so settings edits only redo what changed.
     private var appliedConfig = ""
     private var appliedShortcuts: [KeyCombo] = []
+    /// Drives strip slides while one is running.
+    private var animationTimer: Timer?
+    private var lastTick: CFTimeInterval = 0
 
     func start() {
         let context = Unmanaged.passUnretained(self).toOpaque()
@@ -105,9 +108,33 @@ final class WindowManager {
 
     @discardableResult
     private func publish() -> EngineState? {
+        animate()
         guard let state = engine.state() else { return nil }
         onStateChange?(state)
         return state
+    }
+
+    /// Ticks the engine every frame until the strips stop sliding.
+    private func animate() {
+        guard animationTimer == nil, engine.tick(0) else { return }
+        lastTick = CACurrentMediaTime()
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.step() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        animationTimer = timer
+    }
+
+    private func step() {
+        // Real elapsed time, so slow Accessibility calls skip frames instead
+        // of stretching the slide.
+        let now = CACurrentMediaTime()
+        let sliding = engine.tick(now - lastTick)
+        lastTick = now
+        if !sliding {
+            animationTimer?.invalidate()
+            animationTimer = nil
+        }
     }
 
     /// Syncs on the next run loop turn, coalescing bursts of notifications.

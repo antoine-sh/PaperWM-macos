@@ -22,6 +22,8 @@ pub struct Config {
     pub width_presets: Vec<f64>,
     /// One name per workspace.
     pub workspace_names: Vec<String>,
+    /// Seconds the strip takes to slide to a new scroll position; 0 jumps.
+    pub animation_duration: f64,
 }
 
 impl Default for Config {
@@ -30,16 +32,18 @@ impl Default for Config {
             gap: 8.0,
             width_presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0],
             workspace_names: (1..=WORKSPACE_COUNT).map(|i| i.to_string()).collect(),
+            animation_duration: 0.25,
         }
     }
 }
 
 impl Config {
     /// Parses the app's settings; missing or empty fields take their
-    /// defaults. Returns `None` for malformed JSON or a negative gap.
+    /// defaults. Returns `None` for malformed JSON or a negative gap or
+    /// animation duration.
     pub fn from_json(json: &str) -> Option<Self> {
         let mut config: Config = serde_json::from_str(json).ok()?;
-        if config.gap.is_nan() || config.gap < 0.0 {
+        if !(config.gap >= 0.0 && config.animation_duration >= 0.0) {
             return None;
         }
         let defaults = Config::default();
@@ -212,6 +216,27 @@ pub struct Engine {
     applied: HashMap<WindowId, Rect>,
     /// What the last sync saw of each managed window, for the UI.
     info: HashMap<WindowId, WindowInfo>,
+    /// The scroll on screen for each workspace, sliding toward its target.
+    slides: Vec<Slide>,
+}
+
+/// A strip sliding from one scroll position to another.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+struct Slide {
+    from: f64,
+    to: f64,
+    shown: f64,
+    elapsed: f64,
+}
+
+impl Slide {
+    fn at(scroll: f64) -> Self {
+        Self { from: scroll, to: scroll, shown: scroll, elapsed: 0.0 }
+    }
+
+    fn is_moving(&self) -> bool {
+        self.shown != self.to
+    }
 }
 
 impl Engine {
@@ -229,6 +254,7 @@ impl Engine {
             stale_focus: None,
             applied: HashMap::new(),
             info: HashMap::new(),
+            slides: vec![Slide::default(); WORKSPACE_COUNT],
         }
     }
 
@@ -254,6 +280,7 @@ impl Engine {
         self.config = config;
         self.applied.clear();
         self.ensure_visible_all();
+        self.snap_all();
         self.apply()
     }
 
@@ -325,6 +352,7 @@ impl Engine {
         self.active = self.active.min(self.monitors.len() - 1);
         self.applied.clear();
         self.ensure_visible_all();
+        self.snap_all();
         self.apply()
     }
 
@@ -428,7 +456,8 @@ impl Engine {
             Command::MoveToScratch => self.move_to_scratch(&mut raise),
             Command::FocusWindow(id) => self.focus_window(id, &mut raise),
             Command::ScrollBy(dx) => {
-                ws.scroll_by(dx, viewport, gap);
+                // Pan from what is on screen, even mid-slide.
+                ws.scroll_by(dx + self.slides[current].shown - ws.scroll(), viewport, gap);
                 true
             }
             Command::ScrollEnd => {
@@ -440,6 +469,10 @@ impl Engine {
         };
         if !matches!(command, Command::Center | Command::ScrollBy(_)) {
             self.ensure_visible_all();
+        }
+        if matches!(command, Command::ScrollBy(_)) {
+            // The strip follows the fingers directly.
+            self.slides[current] = Slide::at(self.workspaces[current].scroll());
         }
 
         self.apply()?;
@@ -456,6 +489,35 @@ impl Engine {
             self.focus(id)?;
         }
         Ok(changed)
+    }
+
+    /// Advances strip slides by `seconds` and moves the windows. Returns
+    /// whether any strip is still sliding.
+    pub fn tick(&mut self, seconds: f64) -> Result<bool> {
+        let duration = self.config.animation_duration;
+        let mut moved = false;
+        for slide in self.slides.iter_mut().filter(|s| s.is_moving()) {
+            slide.elapsed += seconds;
+            let t = if duration > 0.0 { (slide.elapsed / duration).min(1.0) } else { 1.0 };
+            // Ease out: start fast, settle gently.
+            let eased = 1.0 - (1.0 - t).powi(3);
+            slide.shown = if t >= 1.0 { slide.to } else { slide.from + (slide.to - slide.from) * eased };
+            moved = true;
+        }
+        if moved {
+            self.apply()?;
+        }
+        Ok(self.is_animating())
+    }
+
+    pub fn is_animating(&self) -> bool {
+        self.slides.iter().any(Slide::is_moving)
+    }
+
+    fn snap_all(&mut self) {
+        for (slide, ws) in self.slides.iter_mut().zip(&self.workspaces) {
+            *slide = Slide::at(ws.scroll());
+        }
     }
 
     pub fn observe_app(&self, pid: i32) {
@@ -646,12 +708,21 @@ impl Engine {
     /// Moves every managed window to its place: shown workspaces in their
     /// strips, everything else into the hiding corner.
     fn apply(&mut self) -> Result<()> {
+        for (index, (slide, ws)) in self.slides.iter_mut().zip(&self.workspaces).enumerate() {
+            let shown = self.monitors.iter().any(|m| m.workspace == index);
+            if !shown || self.config.animation_duration <= 0.0 {
+                *slide = Slide::at(ws.scroll());
+            } else if slide.to != ws.scroll() {
+                *slide = Slide { from: slide.shown, to: ws.scroll(), shown: slide.shown, elapsed: 0.0 };
+            }
+        }
         let areas: Vec<Rect> = self.monitors.iter().map(|m| m.area).collect();
         let mut frames = Vec::new();
         for (i, monitor) in self.monitors.iter().enumerate() {
             let others: Vec<Rect> = areas.iter().enumerate().filter(|&(j, _)| j != i).map(|(_, &a)| a).collect();
             let workspace = &self.workspaces[monitor.workspace];
-            frames.extend(placement::frames(workspace, monitor.area, self.config.gap, &others));
+            let scroll = self.slides[monitor.workspace].shown;
+            frames.extend(placement::frames(workspace, scroll, monitor.area, self.config.gap, &others));
         }
         for (index, workspace) in self.workspaces.iter().enumerate() {
             if self.monitors.iter().any(|m| m.workspace == index) {
@@ -666,10 +737,19 @@ impl Engine {
             frames.push((id, if self.scratch_visible { frame } else { placement::hidden_frame(frame, &areas) }));
         }
         for (id, frame) in frames {
-            if self.applied.get(&id).is_some_and(|f| approx_eq(*f, frame)) {
+            let previous = self.applied.get(&id).copied();
+            if previous.is_some_and(|f| approx_eq(f, frame)) {
                 continue;
             }
-            match self.backend.set_frame(id, frame) {
+            // Sliding only moves windows; skipping the resize halves the
+            // Accessibility calls per frame.
+            let same_size = previous.is_some_and(|f| approx_eq(f, Rect { x: f.x, y: f.y, ..frame }));
+            let result = if same_size {
+                self.backend.set_position(id, frame.x, frame.y)
+            } else {
+                self.backend.set_frame(id, frame)
+            };
+            match result {
                 Ok(()) => {
                     self.applied.insert(id, frame);
                 }
@@ -709,6 +789,9 @@ mod tests {
         fn set_frame(&self, id: WindowId, frame: Rect) -> Result<()> {
             self.0.set_frame(id, frame)
         }
+        fn set_position(&self, id: WindowId, x: f64, y: f64) -> Result<()> {
+            self.0.set_position(id, x, y)
+        }
         fn focused_window(&self) -> Option<WindowId> {
             self.0.focused_window()
         }
@@ -723,6 +806,7 @@ mod tests {
     fn engine_with(windows: Vec<WindowInfo>) -> (Engine, Rc<MockBackend>) {
         let backend = Rc::new(MockBackend::new(windows));
         let mut engine = Engine::new(Box::new(Shared(backend.clone())));
+        engine.set_config(Config { animation_duration: 0.0, ..Config::default() }).unwrap();
         engine.set_monitors(&[SCREEN]).unwrap();
         (engine, backend)
     }
@@ -1209,6 +1293,7 @@ mod tests {
 
         assert_eq!(Config::from_json("nope"), None);
         assert_eq!(Config::from_json(r#"{"gap":-3}"#), None);
+        assert_eq!(Config::from_json(r#"{"animation_duration":-1}"#), None);
     }
 
     #[test]
@@ -1240,5 +1325,53 @@ mod tests {
         let mut engine = Engine::new(Box::new(MockBackend::untrusted()));
         engine.set_monitors(&[SCREEN]).unwrap();
         assert_eq!(engine.sync(), Err(BackendError::NotTrusted));
+    }
+
+    fn sliding_engine() -> (Engine, Rc<MockBackend>) {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 600.0), window(2, 100.0, 600.0), window(3, 200.0, 600.0)]);
+        engine.sync().unwrap();
+        engine.set_config(Config { animation_duration: 0.2, ..Config::default() }).unwrap();
+        assert_eq!(engine.workspace(0).unwrap().scroll(), 816.0);
+        (engine, backend)
+    }
+
+    #[test]
+    fn strip_slides_to_the_new_scroll() {
+        let (mut engine, backend) = sliding_engine();
+        let parked = backend.frame_of(1).unwrap();
+        engine.command(Command::FocusFirst).unwrap();
+        assert_eq!(backend.frame_of(1), Some(parked));
+        assert!(engine.is_animating());
+
+        assert_eq!(engine.tick(0.1), Ok(true));
+        // Halfway in time, eased out: 816 * (1 - 0.875) = 102 left to go.
+        assert_eq!(backend.frame_of(1).unwrap().x, 8.0 - 102.0);
+        assert_eq!(backend.frame_of(1).unwrap().width, 600.0);
+        assert_eq!(engine.tick(0.1), Ok(false));
+        assert_eq!(backend.frame_of(1).unwrap().x, 8.0);
+    }
+
+    #[test]
+    fn new_target_mid_slide_starts_from_where_the_strip_is() {
+        let (mut engine, backend) = sliding_engine();
+        engine.command(Command::FocusFirst).unwrap();
+        engine.tick(0.1).unwrap();
+        engine.command(Command::FocusLast).unwrap();
+        // Nothing jumps: the strip turns around from scroll 102.
+        assert_eq!(backend.frame_of(1).unwrap().x, 8.0 - 102.0);
+        engine.tick(1.0).unwrap();
+        assert_eq!(backend.frame_of(3).unwrap().x, 1216.0 + 8.0 - 816.0);
+    }
+
+    #[test]
+    fn pans_follow_the_fingers_without_sliding() {
+        let (mut engine, backend) = sliding_engine();
+        engine.command(Command::FocusFirst).unwrap();
+        engine.tick(0.1).unwrap();
+        engine.command(Command::ScrollBy(-50.0)).unwrap();
+        assert!(!engine.is_animating());
+        assert_eq!(engine.workspace(0).unwrap().scroll(), 52.0);
+        assert_eq!(backend.frame_of(1).unwrap().x, 8.0 - 52.0);
     }
 }
