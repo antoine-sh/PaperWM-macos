@@ -1,8 +1,9 @@
 import AppKit
 import Carbon.HIToolbox
 import SwiftUI
+import UniformTypeIdentifiers
 
-/// The Settings window: layout, workspace names and shortcuts.
+/// The Settings window: layout, workspace names, app rules and shortcuts.
 struct SettingsView: View {
     @ObservedObject var settings: Settings
     /// Shortcut ids macOS refused to register.
@@ -15,10 +16,11 @@ struct SettingsView: View {
         TabView {
             layout.tabItem { Text("Layout") }
             appearance.tabItem { Text("Appearance") }
+            apps.tabItem { Text("Apps") }
             shortcuts.tabItem { Text("Shortcuts") }
         }
         .padding()
-        .frame(width: 560, height: 520)
+        .frame(width: 620, height: 520)
         .onAppear { presetsText = Self.format(settings.values.widthPresets) }
     }
 
@@ -80,6 +82,90 @@ struct SettingsView: View {
         )
     }
 
+    private var apps: some View {
+        VStack(alignment: .leading) {
+            if settings.values.appRules.isEmpty {
+                Text("Every app tiles. Add an app to float it or give it a fixed place on the strip.")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                List {
+                    ForEach(settings.values.appRules) { rule in
+                        AppRuleRow(rule: binding(for: rule), workspaceNames: settings.values.workspaceNames) {
+                            settings.values.appRules.removeAll { $0.id == rule.id }
+                        }
+                    }
+                }
+            }
+            HStack {
+                Menu("Add App") {
+                    ForEach(runningApps, id: \.name) { app in
+                        Button {
+                            addRule(app: app.name, bundleID: app.bundleID)
+                        } label: {
+                            Label { Text(app.name) } icon: { Image(nsImage: AppIcons.small(app.icon)) }
+                        }
+                    }
+                    if !runningApps.isEmpty { Divider() }
+                    Button("Other App…") { chooseApp() }
+                }
+                .fixedSize()
+                Spacer()
+            }
+            Text("Floating apps are left where they are, on every workspace, like dialogs. "
+                 + "An app with a slot opens at that column of that workspace; you can still move it after.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private struct RunningApp {
+        let name: String
+        let bundleID: String?
+        let icon: NSImage?
+    }
+
+    /// Running apps without a rule yet, by name.
+    private var runningApps: [RunningApp] {
+        let taken = Set(settings.values.appRules.map(\.app))
+        var seen = Set<String>()
+        return NSWorkspace.shared.runningApplications
+            .filter { $0.activationPolicy == .regular && $0.processIdentifier != getpid() }
+            .compactMap { app in
+                app.localizedName.map { RunningApp(name: $0, bundleID: app.bundleIdentifier, icon: app.icon) }
+            }
+            .filter { !taken.contains($0.name) && seen.insert($0.name).inserted }
+            .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+    }
+
+    /// Edits the rule with `rule`'s id, which survives others being removed.
+    private func binding(for rule: AppRule) -> Binding<AppRule> {
+        Binding(
+            get: { settings.values.appRules.first { $0.id == rule.id } ?? rule },
+            set: { edited in
+                guard let index = settings.values.appRules.firstIndex(where: { $0.id == rule.id }) else { return }
+                settings.values.appRules[index] = edited
+            }
+        )
+    }
+
+    private func addRule(app: String, bundleID: String?) {
+        guard !settings.values.appRules.contains(where: { $0.app == app }) else { return }
+        settings.values.appRules.append(AppRule(app: app, bundleID: bundleID))
+    }
+
+    /// Picks an app that is not running from the Applications folder.
+    private func chooseApp() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.prompt = "Add"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        var name = FileManager.default.displayName(atPath: url.path)
+        if name.hasSuffix(".app") { name.removeLast(4) }
+        addRule(app: name, bundleID: Bundle(url: url)?.bundleIdentifier)
+    }
+
     private var shortcuts: some View {
         List(HotKey.defaults, id: \.id) { hotKey in
             HStack {
@@ -124,6 +210,42 @@ struct SettingsView: View {
             return nil
         }
         return values.map { $0 / 100 }
+    }
+}
+
+/// One app's rule: float it, or pin it to a workspace and column.
+private struct AppRuleRow: View {
+    @Binding var rule: AppRule
+    let workspaceNames: [String]
+    let onRemove: () -> Void
+
+    var body: some View {
+        HStack {
+            Image(nsImage: AppIcons.small(AppIcons.icon(bundleID: rule.bundleID, name: rule.app)))
+            Text(rule.app).lineLimit(1)
+            Spacer()
+            Picker("Placement", selection: $rule.action) {
+                Text("Float").tag(AppRule.Action.float)
+                Text("Fixed slot").tag(AppRule.Action.slot)
+            }
+            .labelsHidden()
+            .fixedSize()
+            if rule.action == .slot {
+                Picker("Workspace", selection: $rule.workspace) {
+                    ForEach(0..<workspaceNames.count, id: \.self) { index in
+                        Text(workspaceNames[index].isEmpty ? "Workspace \(index + 1)" : workspaceNames[index])
+                            .tag(index)
+                    }
+                }
+                .labelsHidden()
+                .fixedSize()
+                Stepper("Column \(rule.column + 1)", value: $rule.column, in: 0...19)
+                    .fixedSize()
+            }
+            Button(action: onRemove) { Image(systemName: "minus.circle") }
+                .buttonStyle(.borderless)
+                .help("Remove the rule")
+        }
     }
 }
 

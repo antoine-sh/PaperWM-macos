@@ -28,6 +28,33 @@ pub struct Config {
     pub animation_duration: f64,
     /// When the focused column is kept centred.
     pub center_focused: CenterFocus,
+    /// How windows of particular apps are placed; the first rule naming an
+    /// app wins.
+    pub app_rules: Vec<AppRule>,
+}
+
+/// Placement for every window of one app.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct AppRule {
+    /// The app's name as macOS shows it, e.g. "System Settings".
+    pub app: String,
+    pub action: AppAction,
+    /// For `Slot`: the workspace index the app's windows open on.
+    #[serde(default)]
+    pub workspace: usize,
+    /// For `Slot`: the column index they open at, or the end of the strip
+    /// if it has fewer columns.
+    #[serde(default)]
+    pub column: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AppAction {
+    /// Left out of tiling, like dialogs: never moved, on every workspace.
+    Float,
+    /// Tiled at a fixed column of a fixed workspace when it opens.
+    Slot,
 }
 
 impl Default for Config {
@@ -38,14 +65,21 @@ impl Default for Config {
             workspace_names: (1..=WORKSPACE_COUNT).map(|i| i.to_string()).collect(),
             animation_duration: 0.25,
             center_focused: CenterFocus::Never,
+            app_rules: Vec::new(),
         }
     }
 }
 
 impl Config {
+    /// The rule for windows of the app named `app`.
+    pub fn rule_for(&self, app: &str) -> Option<&AppRule> {
+        self.app_rules.iter().find(|r| r.app == app)
+    }
+
     /// Parses the app's settings; missing or empty fields take their
     /// defaults. Returns `None` for malformed JSON or a negative gap or
-    /// animation duration.
+    /// animation duration. Rules naming a workspace that does not exist are
+    /// dropped.
     pub fn from_json(json: &str) -> Option<Self> {
         let mut config: Config = serde_json::from_str(json).ok()?;
         if !(config.gap >= 0.0 && config.animation_duration >= 0.0) {
@@ -58,6 +92,7 @@ impl Config {
         config.workspace_names.truncate(WORKSPACE_COUNT);
         let have = config.workspace_names.len();
         config.workspace_names.extend(defaults.workspace_names.into_iter().skip(have));
+        config.app_rules.retain(|r| r.workspace < WORKSPACE_COUNT);
         Some(config)
     }
 }
@@ -282,7 +317,14 @@ impl Engine {
     pub fn set_config(&mut self, config: Config) -> Result<()> {
         let relayout = config.gap != self.config.gap || config.center_focused != self.config.center_focused;
         let resnap = relayout || config.animation_duration != self.config.animation_duration;
+        let rules_changed = config.app_rules != self.config.app_rules;
         self.config = config;
+        if rules_changed {
+            // Floating windows are not tracked, so every app is read again
+            // to tile the ones that no longer float, or release new floaters.
+            self.backend.invalidate();
+            self.sync()?;
+        }
         if relayout {
             self.ensure_visible_all();
         }
@@ -405,6 +447,21 @@ impl Engine {
                 }
             }
         }
+        // Windows of floating apps leave the layout; ones it held go back on
+        // screen, since they may be parked or hidden.
+        let floating: Vec<WindowId> = current
+            .values()
+            .filter(|w| self.config.rule_for(&w.app_name).is_some_and(|r| r.action == AppAction::Float))
+            .map(|w| w.id)
+            .collect();
+        let mut released = Vec::new();
+        for id in floating {
+            let info = current.remove(&id).expect("listed above");
+            if self.info.contains_key(&id) {
+                released.push((id, self.applier.get(id).unwrap_or(info.frame)));
+                self.applier.forget(id);
+            }
+        }
         self.info = current;
 
         self.scratch.retain(|(id, _)| self.info.contains_key(id));
@@ -429,9 +486,23 @@ impl Engine {
             self.info.values().filter(|w| !managed.contains(&w.id)).map(|w| (w.id, w.frame)).collect();
         new.sort_by(|a, b| a.1.x.total_cmp(&b.1.x).then(a.0.cmp(&b.0)));
         for (id, frame) in new {
+            let slot = self.config.rule_for(&self.info[&id].app_name).filter(|r| r.action == AppAction::Slot);
+            if let Some(&AppRule { workspace, column, .. }) = slot {
+                let monitor = self.monitors.iter().position(|m| m.workspace == workspace).unwrap_or(self.active);
+                let viewport = self.viewport(monitor);
+                self.workspaces[workspace].insert_window_at(id, column, frame.width, viewport);
+                continue;
+            }
             let monitor = self.monitor_at(frame).unwrap_or(self.active);
             let viewport = self.viewport(monitor);
             self.workspaces[self.monitors[monitor].workspace].insert_window(id, frame.width, viewport);
+        }
+        let area = self.monitors[self.active].area;
+        for (id, frame) in released {
+            match self.backend.set_frame(id, centred(frame, area)) {
+                Ok(()) | Err(BackendError::WindowNotFound(_)) => {}
+                Err(err) => return Err(err),
+            }
         }
 
         // Tiled windows on screen that the user or their app moved.
@@ -701,14 +772,7 @@ impl Engine {
         }
         let Some(id) = self.focused_window() else { return false };
         self.workspaces[current].remove_window(id);
-        let size = self.last_frame(id);
-        let area = self.monitors[self.active].area;
-        let frame = Rect::new(
-            area.x + (area.width - size.width) / 2.0,
-            area.y + (area.height - size.height) / 2.0,
-            size.width,
-            size.height,
-        );
+        let frame = centred(self.last_frame(id), self.monitors[self.active].area);
         self.scratch.push((id, frame));
         self.scratch_visible = true;
         raise.push(id);
@@ -806,6 +870,16 @@ impl Engine {
         }
         self.applier.write(self.backend.as_ref(), frames)
     }
+}
+
+/// `frame`'s size, centred in `area`.
+fn centred(frame: Rect, area: Rect) -> Rect {
+    Rect::new(
+        area.x + (area.width - frame.width) / 2.0,
+        area.y + (area.height - frame.height) / 2.0,
+        frame.width,
+        frame.height,
+    )
 }
 
 #[cfg(test)]
@@ -1365,6 +1439,84 @@ mod tests {
             CenterFocus::OnOverflow
         );
         assert_eq!(Config::from_json(r#"{"center_focused":"sometimes"}"#), None);
+    }
+
+    #[test]
+    fn config_reads_app_rules() {
+        let config = Config::from_json(
+            r#"{"app_rules":[{"app":"Calculator","action":"float"},
+                {"app":"Mail","action":"slot","workspace":2,"column":1},
+                {"app":"Notes","action":"slot","workspace":9}]}"#,
+        )
+        .unwrap();
+        assert_eq!(config.app_rules.len(), 2, "the rule for a missing workspace is dropped");
+        assert_eq!(config.rule_for("Calculator").map(|r| r.action), Some(AppAction::Float));
+        let mail = config.rule_for("Mail").unwrap();
+        assert_eq!((mail.action, mail.workspace, mail.column), (AppAction::Slot, 2, 1));
+        assert_eq!(config.rule_for("Notes"), None);
+        assert_eq!(Config::from_json(r#"{"app_rules":[{"app":"Mail","action":"tile"}]}"#), None);
+    }
+
+    fn rules(rules: &[(&str, AppAction, usize, usize)]) -> Config {
+        let app_rules = rules
+            .iter()
+            .map(|&(app, action, workspace, column)| AppRule { app: app.into(), action, workspace, column })
+            .collect();
+        Config { animation_duration: 0.0, app_rules, ..Config::default() }
+    }
+
+    #[test]
+    fn floating_apps_are_left_alone() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 500.0, 300.0)]);
+        engine.set_config(rules(&[("App 2", AppAction::Float, 0, 0)])).unwrap();
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1]]);
+        assert_eq!(backend.frame_of(2), Some(Rect::new(500.0, 100.0, 300.0, 300.0)));
+
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        assert_eq!(engine.state().focused_window, Some(2));
+        assert!(engine.state().windows.iter().all(|w| w.id != 2));
+    }
+
+    #[test]
+    fn floating_a_tiled_app_brings_its_window_back_on_screen() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::SwitchWorkspace(1)).unwrap();
+        assert!(is_hidden(backend.frame_of(1).unwrap()));
+
+        engine.set_config(rules(&[("App 1", AppAction::Float, 0, 0)])).unwrap();
+        assert_eq!(columns(&engine), Vec::<Vec<WindowId>>::new());
+        let frame = backend.frame_of(1).unwrap();
+        assert_eq!(frame.width, 300.0);
+        assert_eq!(frame.x, SCREEN.x + (SCREEN.width - 300.0) / 2.0);
+
+        // Without the rule it tiles again, on the workspace in view.
+        engine.set_config(rules(&[])).unwrap();
+        assert_eq!(engine.workspace(1).unwrap().windows().collect::<Vec<_>>(), vec![1]);
+    }
+
+    #[test]
+    fn slotted_apps_open_at_their_column_and_workspace() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.set_config(rules(&[("App 3", AppAction::Slot, 0, 0), ("App 4", AppAction::Slot, 2, 5)])).unwrap();
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+
+        backend.add(window(3, 800.0, 300.0));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![3], vec![1], vec![2]]);
+
+        backend.add(window(4, 800.0, 300.0));
+        engine.sync().unwrap();
+        assert_eq!(engine.workspace(2).unwrap().windows().collect::<Vec<_>>(), vec![4]);
+        assert!(is_hidden(backend.frame_of(4).unwrap()));
+
+        // Focusing it brings its workspace in, as for any hidden window.
+        backend.set_focused(Some(4));
+        engine.sync().unwrap();
+        assert_eq!(shown(&engine), vec![2]);
     }
 
     #[test]
