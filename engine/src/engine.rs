@@ -441,7 +441,7 @@ impl Engine {
             let ws = &mut self.workspaces[index];
             let kept = keep.entry(index).or_insert(ws.focused_window());
             ws.insert_window(id, frame.width, viewport);
-            if front.is_some() && front == Some(self.info[&id].pid) {
+            if front == Some(self.info[&id].pid) {
                 *kept = Some(id);
             }
         }
