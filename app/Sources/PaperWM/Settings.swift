@@ -8,6 +8,14 @@ enum MinimapStyle: String, Codable {
     case toolbar
 }
 
+/// When the strip keeps the focused column in the middle of the screen.
+enum CenterFocus: String, Codable {
+    case never
+    /// Only while the columns don't all fit on screen.
+    case onOverflow = "on_overflow"
+    case always
+}
+
 /// The user's preferences, stored as JSON in `UserDefaults`.
 @MainActor
 final class Settings: ObservableObject {
@@ -18,6 +26,7 @@ final class Settings: ObservableObject {
         var workspaceNames: [String] = (1...Int(PWM_WORKSPACE_COUNT)).map { String($0) }
         /// Seconds the strip takes to scroll; 0 jumps.
         var animationDuration: Double = 0.25
+        var centerFocused: CenterFocus = .never
         /// Shortcut overrides by `HotKey.id`; missing ids use the default.
         var shortcuts: [String: KeyCombo] = [:]
         /// Draw a colored border around the focused window.
@@ -45,6 +54,7 @@ final class Settings: ObservableObject {
             workspaceNames = try c.decodeIfPresent([String].self, forKey: .workspaceNames) ?? defaults.workspaceNames
             animationDuration = try c.decodeIfPresent(Double.self, forKey: .animationDuration)
                 ?? defaults.animationDuration
+            centerFocused = try c.decodeIfPresent(CenterFocus.self, forKey: .centerFocused) ?? defaults.centerFocused
             shortcuts = try c.decodeIfPresent([String: KeyCombo].self, forKey: .shortcuts) ?? defaults.shortcuts
             focusBorder = try c.decodeIfPresent(Bool.self, forKey: .focusBorder) ?? defaults.focusBorder
             borderColor = try c.decodeIfPresent(String.self, forKey: .borderColor) ?? defaults.borderColor
@@ -91,11 +101,12 @@ final class Settings: ObservableObject {
             let widthPresets: [Double]
             let workspaceNames: [String]
             let animationDuration: Double
+            let centerFocused: CenterFocus
         }
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
         let config = Config(gap: values.gap, widthPresets: values.widthPresets, workspaceNames: values.workspaceNames,
-                            animationDuration: values.animationDuration)
+                            animationDuration: values.animationDuration, centerFocused: values.centerFocused)
         return (try? encoder.encode(config)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
     }
 
