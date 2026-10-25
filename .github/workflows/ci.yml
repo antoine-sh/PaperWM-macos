@@ -30,7 +30,11 @@ jobs:
       - name: Build app
         run: scripts/build-app.sh --universal
 
+      - name: Package disk image
+        run: scripts/make-dmg.sh
+
       - uses: actions/upload-artifact@v4
         with:
-          name: PaperWM.app
-          path: build/PaperWM.app
+          name: PaperWM-dmg
+          path: build/PaperWM-*.dmg
+          if-no-files-found: error
