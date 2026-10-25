@@ -295,6 +295,10 @@ impl WindowBackend for AxBackend {
         self.timed(pid, || app.element(kAXFocusedWindowAttribute).ok_or(kAXErrorCannotComplete)).ok()?.window_id()
     }
 
+    fn focused_app(&self) -> Option<i32> {
+        AxElement::system_wide().element(kAXFocusedApplicationAttribute)?.pid()
+    }
+
     fn focus(&self, id: WindowId) -> Result<()> {
         let (element, pid) = self.element(id)?;
         let app = self.app(pid).ok_or(BackendError::WindowNotFound(id))?;

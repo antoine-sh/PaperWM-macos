@@ -46,4 +46,8 @@ impl Rect {
     pub fn max_y(&self) -> f64 {
         self.y + self.height
     }
+
+    pub fn contains(&self, point: Point) -> bool {
+        point.x >= self.x && point.x < self.max_x() && point.y >= self.y && point.y < self.max_y()
+    }
 }

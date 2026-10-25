@@ -192,6 +192,19 @@ pub unsafe extern "C" fn pwm_engine_sync(engine: *mut Engine) -> PwmStatus {
     status(engine.sync())
 }
 
+/// Syncs after a drag ended with the pointer at `x`, `y` (Accessibility
+/// coordinates), moving a tiled window dragged there into the column under it.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_drop(engine: *mut Engine, x: f64, y: f64) -> PwmStatus {
+    let Some(engine) = engine.as_mut() else {
+        return PwmStatus::NullPointer;
+    };
+    status(engine.drop_at(x, y))
+}
+
 /// Puts every window back in its place and syncs.
 ///
 /// # Safety
@@ -386,6 +399,7 @@ mod tests {
             assert_eq!(pwm_engine_list_windows(ptr::null()).status, PwmStatus::NullPointer);
             assert_eq!(pwm_engine_sync(ptr::null_mut()), PwmStatus::NullPointer);
             assert_eq!(pwm_engine_retile(ptr::null_mut()), PwmStatus::NullPointer);
+            assert_eq!(pwm_engine_drop(ptr::null_mut(), 0.0, 0.0), PwmStatus::NullPointer);
             assert_eq!(pwm_engine_command(ptr::null_mut(), 0, 0.0, ptr::null_mut()), PwmStatus::NullPointer);
             let mut status = PwmStatus::Ok;
             assert!(!pwm_engine_tick(ptr::null_mut(), 0.1, &mut status));
