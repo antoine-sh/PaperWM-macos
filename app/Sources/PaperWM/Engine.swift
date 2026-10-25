@@ -102,6 +102,21 @@ final class Engine {
         if let error = EngineError(pwm_engine_command(handle, command.rawValue, arg)) { throw error }
     }
 
+    /// The current layout, or nil if the engine could not describe it.
+    func state() -> EngineState? {
+        guard let json = pwm_engine_state_json(handle) else { return nil }
+        defer { pwm_string_free(json) }
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try? decoder.decode(EngineState.self, from: Data(String(cString: json).utf8))
+    }
+
+    /// Applies settings given as `engine::Config` JSON.
+    func setConfig(json: String) throws {
+        let status = json.withCString { pwm_engine_set_config(handle, $0) }
+        if let error = EngineError(status) { throw error }
+    }
+
     func observeApp(_ pid: pid_t) {
         pwm_engine_observe_app(handle, pid)
     }
