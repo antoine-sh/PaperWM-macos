@@ -13,7 +13,8 @@ final class WindowManager {
     /// Called with the new layout after every sync or command.
     var onStateChange: ((EngineState) -> Void)?
     private let minimap = Minimap()
-    private lazy var modifiers = ModifierWatcher { [weak self] in self?.minimap.hide() }
+    private let switcher = Switcher()
+    private lazy var modifiers = ModifierWatcher { [weak self] in self?.superReleased() }
     private var syncScheduled = false
 
     func start() {
@@ -57,11 +58,26 @@ final class WindowManager {
 
     func perform(_ action: Action) {
         switch action {
+        case .engine(PWM_COMMAND_TOGGLE_SCRATCH, _) where switcher.isOpen:
+            // ⌃⌥Esc while switching cancels, as Esc does in PaperWM.
+            switcher.cancel()
         case .engine(let command, let arg):
             report { try engine.run(command, arg: arg) }
             if let state = publish() { minimap.show(state) }
-        case .switcher:
-            break
+        case .switcher(let forward):
+            guard let state = engine.state() else { return }
+            minimap.hide()
+            switcher.step(forward: forward, state: state)
+            // A quick tap that is already over switches straight away.
+            if !ModifierWatcher.superHeld { superReleased() }
+        }
+    }
+
+    private func superReleased() {
+        minimap.hide()
+        if let id = switcher.commit() {
+            perform(.engine(PWM_COMMAND_FOCUS_WINDOW, Double(id)))
+            minimap.hide()
         }
     }
 
