@@ -8,14 +8,15 @@ pub mod backend;
 pub mod engine;
 pub mod ffi;
 pub mod geometry;
-pub mod layout;
 pub mod mock;
+pub mod placement;
+pub mod workspace;
 
 #[cfg(target_os = "macos")]
 pub mod macos;
 
 pub use backend::{BackendError, WindowBackend, WindowId, WindowInfo};
-pub use engine::Engine;
+pub use engine::{Command, Config, Engine};
 pub use geometry::Rect;
 
 pub(crate) mod platform {

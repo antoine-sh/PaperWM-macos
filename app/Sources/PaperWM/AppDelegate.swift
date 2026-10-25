@@ -1,12 +1,12 @@
 import AppKit
 
-/// Menu bar app hosting the engine. For now it offers the proof-of-concept
-/// actions; keyboard control arrives with the scrollable layout.
+/// Menu bar app hosting the window manager.
 @main
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private let engine = Engine()
+    private var manager: WindowManager?
     private var statusItem: NSStatusItem?
+    private var trustTimer: Timer?
 
     static func main() {
         let app = NSApplication.shared
@@ -24,9 +24,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         item.menu = menu
         statusItem = item
 
-        if !Engine.isTrusted() {
+        if Engine.isTrusted() {
+            startManager()
+        } else {
             _ = Engine.isTrusted(prompt: true)
+            waitForTrust()
         }
+    }
+
+    /// Starts tiling as soon as the user grants Accessibility access.
+    private func waitForTrust() {
+        trustTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] timer in
+            MainActor.assumeIsolated {
+                guard Engine.isTrusted() else { return }
+                timer.invalidate()
+                self?.startManager()
+            }
+        }
+    }
+
+    private func startManager() {
+        guard manager == nil else { return }
+        let manager = WindowManager()
+        self.manager = manager
+        manager.start()
     }
 
     // Rebuilt on every open so the permission state is current.
@@ -34,10 +55,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.removeAllItems()
         menu.addItem(disabled("PaperWM \(Engine.version)"))
 
-        if Engine.isTrusted() {
-            menu.addItem(disabled("Accessibility access granted"))
+        if let manager {
+            menu.addItem(disabled("Tiling windows"))
             menu.addItem(.separator())
-            menu.addItem(action("Tile Windows on This Screen", #selector(tileWindows)))
+            menu.addItem(action("Re-tile Now", #selector(retile)))
+            let shortcuts = NSMenuItem(title: "Keyboard Shortcuts", action: nil, keyEquivalent: "")
+            let submenu = NSMenu()
+            for hotKey in manager.hotKeys.hotKeys {
+                submenu.addItem(disabled("\(hotKey.symbol)\t\(hotKey.title)"))
+            }
+            shortcuts.submenu = submenu
+            menu.addItem(shortcuts)
             menu.addItem(action("Show Windows…", #selector(showWindows)))
         } else {
             menu.addItem(disabled("Accessibility access needed"))
@@ -48,25 +76,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(NSMenuItem(title: "Quit PaperWM", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
     }
 
-    @objc private func tileWindows() {
-        guard let screen = NSScreen.main else { return }
-        do {
-            _ = try engine.tileColumns(in: screen.accessibilityVisibleFrame, gap: 8)
-        } catch {
-            show(error)
-        }
+    @objc private func retile() {
+        manager?.syncNow()
     }
 
     @objc private func showWindows() {
+        guard let manager else { return }
         do {
-            let lines = try engine.windows().map { w in
-                let flags = [w.isStandard ? nil : "non-standard", w.isMinimized ? "minimized" : nil].compactMap { $0 }
+            let lines = try manager.engine.windows().map { w in
+                let flags = [w.isStandard ? nil : "floating", w.isMinimized ? "minimized" : nil].compactMap { $0 }
                 let suffix = flags.isEmpty ? "" : " (\(flags.joined(separator: ", ")))"
                 return "\(w.appName): \(w.title.isEmpty ? "untitled" : w.title)\(suffix)"
             }
             alert(title: "\(lines.count) windows", text: lines.joined(separator: "\n"))
         } catch {
-            show(error)
+            alert(title: "PaperWM", text: String(describing: error))
         }
     }
 
@@ -75,10 +99,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
-    }
-
-    private func show(_ error: Error) {
-        alert(title: "PaperWM", text: String(describing: error))
     }
 
     private func alert(title: String, text: String) {

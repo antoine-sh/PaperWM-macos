@@ -5,6 +5,7 @@
 
 mod ax;
 mod backend;
+mod observer;
 mod window_list;
 
 pub use backend::AxBackend;

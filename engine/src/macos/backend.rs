@@ -4,11 +4,13 @@ use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
 
 use accessibility_sys::{
-    kAXMinimizedAttribute, kAXPositionAttribute, kAXSizeAttribute, kAXStandardWindowSubrole, kAXSubroleAttribute,
-    kAXTitleAttribute, kAXWindowsAttribute,
+    kAXFocusedApplicationAttribute, kAXFocusedWindowAttribute, kAXFrontmostAttribute, kAXMainAttribute,
+    kAXMinimizedAttribute, kAXPositionAttribute, kAXRaiseAction, kAXSizeAttribute, kAXStandardWindowSubrole,
+    kAXSubroleAttribute, kAXTitleAttribute, kAXWindowsAttribute,
 };
 
 use super::ax::{to_backend_error, AxElement};
+use super::observer::{AppObserver, HandlerSlot};
 use super::window_list;
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
 use crate::geometry::{Point, Rect, Size};
@@ -17,6 +19,9 @@ use crate::geometry::{Point, Rect, Size};
 pub struct AxBackend {
     /// AX handles for the windows seen by the last `windows()` call.
     elements: RefCell<HashMap<WindowId, AxElement>>,
+    /// Declared before `handler` so observers are torn down first.
+    observers: RefCell<HashMap<i32, AppObserver>>,
+    handler: Box<HandlerSlot>,
 }
 
 impl AxBackend {
@@ -44,7 +49,9 @@ impl WindowBackend for AxBackend {
         }
         let on_screen = window_list::on_screen_windows();
         let own_pid = std::process::id() as i32;
-        let pids: BTreeSet<i32> = on_screen.values().map(|w| w.pid).filter(|&pid| pid != own_pid).collect();
+        let mut observers = self.observers.borrow_mut();
+        let pids: BTreeSet<i32> =
+            on_screen.values().map(|w| w.pid).chain(observers.keys().copied()).filter(|&pid| pid != own_pid).collect();
 
         let mut elements = HashMap::new();
         let mut windows = Vec::new();
@@ -73,9 +80,15 @@ impl WindowBackend for AxBackend {
                     is_standard: element.string(kAXSubroleAttribute).as_deref() == Some(kAXStandardWindowSubrole),
                     is_minimized,
                 };
+                if let Some(observer) = observers.get_mut(&pid) {
+                    observer.watch_window(id, &element);
+                }
                 windows.push((z_order, info));
                 elements.insert(id, element);
             }
+        }
+        for observer in observers.values_mut() {
+            observer.retain_windows(|id| elements.contains_key(&id));
         }
         windows.sort_by_key(|(z, w)| (*z, w.id));
         *self.elements.borrow_mut() = elements;
@@ -100,5 +113,43 @@ impl WindowBackend for AxBackend {
             }
             err
         })
+    }
+
+    fn focused_window(&self) -> Option<WindowId> {
+        AxElement::system_wide()
+            .element(kAXFocusedApplicationAttribute)?
+            .element(kAXFocusedWindowAttribute)?
+            .window_id()
+    }
+
+    fn focus(&self, id: WindowId) -> Result<()> {
+        let element = self.element(id)?;
+        let pid = element.pid().ok_or(BackendError::WindowNotFound(id))?;
+        let app = AxElement::application(pid).ok_or(BackendError::WindowNotFound(id))?;
+        // Making the window main before activating the app keeps macOS from
+        // bringing a different window of the same app forward.
+        let _ = element.set_true(kAXMainAttribute);
+        let _ = app.set_true(kAXFrontmostAttribute);
+        element.perform(kAXRaiseAction).map_err(|err| to_backend_error(err, id))
+    }
+
+    fn observe_app(&self, pid: i32) {
+        if pid == std::process::id() as i32 || self.observers.borrow().contains_key(&pid) {
+            return;
+        }
+        let Some(app) = AxElement::application(pid) else { return };
+        let context: *const HandlerSlot = &*self.handler;
+        // SAFETY: `handler` is boxed and outlives `observers` (field order).
+        if let Some(observer) = unsafe { AppObserver::new(pid, &app, context) } {
+            self.observers.borrow_mut().insert(pid, observer);
+        }
+    }
+
+    fn forget_app(&self, pid: i32) {
+        self.observers.borrow_mut().remove(&pid);
+    }
+
+    fn set_change_handler(&self, handler: Box<dyn Fn()>) {
+        *self.handler.borrow_mut() = Some(handler);
     }
 }

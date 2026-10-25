@@ -1,6 +1,6 @@
 //! An in-memory [`WindowBackend`] for tests and non-macOS builds.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
 use crate::geometry::Rect;
@@ -8,16 +8,18 @@ use crate::geometry::Rect;
 #[derive(Debug, Default)]
 pub struct MockBackend {
     windows: RefCell<Vec<WindowInfo>>,
+    focused: Cell<Option<WindowId>>,
+    set_frame_calls: Cell<usize>,
     trusted: bool,
 }
 
 impl MockBackend {
     pub fn new(windows: Vec<WindowInfo>) -> Self {
-        Self { windows: RefCell::new(windows), trusted: true }
+        Self { windows: RefCell::new(windows), trusted: true, ..Self::default() }
     }
 
     pub fn untrusted() -> Self {
-        Self { windows: RefCell::default(), trusted: false }
+        Self::default()
     }
 
     /// A standard, visible window with the given id and frame.
@@ -33,8 +35,31 @@ impl MockBackend {
         }
     }
 
+    pub fn add(&self, window: WindowInfo) {
+        self.windows.borrow_mut().push(window);
+    }
+
+    pub fn remove(&self, id: WindowId) {
+        self.windows.borrow_mut().retain(|w| w.id != id);
+    }
+
+    pub fn update(&self, id: WindowId, f: impl FnOnce(&mut WindowInfo)) {
+        if let Some(w) = self.windows.borrow_mut().iter_mut().find(|w| w.id == id) {
+            f(w);
+        }
+    }
+
+    /// Simulates the user focusing a window, e.g. by clicking it.
+    pub fn set_focused(&self, id: Option<WindowId>) {
+        self.focused.set(id);
+    }
+
     pub fn frame_of(&self, id: WindowId) -> Option<Rect> {
         self.windows.borrow().iter().find(|w| w.id == id).map(|w| w.frame)
+    }
+
+    pub fn set_frame_calls(&self) -> usize {
+        self.set_frame_calls.get()
     }
 }
 
@@ -54,9 +79,22 @@ impl WindowBackend for MockBackend {
         if !self.trusted {
             return Err(BackendError::NotTrusted);
         }
+        self.set_frame_calls.set(self.set_frame_calls.get() + 1);
         let mut windows = self.windows.borrow_mut();
         let window = windows.iter_mut().find(|w| w.id == id).ok_or(BackendError::WindowNotFound(id))?;
         window.frame = frame;
+        Ok(())
+    }
+
+    fn focused_window(&self) -> Option<WindowId> {
+        self.focused.get()
+    }
+
+    fn focus(&self, id: WindowId) -> Result<()> {
+        if !self.windows.borrow().iter().any(|w| w.id == id) {
+            return Err(BackendError::WindowNotFound(id));
+        }
+        self.focused.set(Some(id));
         Ok(())
     }
 }
