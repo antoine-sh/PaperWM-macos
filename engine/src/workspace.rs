@@ -114,11 +114,39 @@ impl Workspace {
     }
 
     /// Adds `id` as a new column at `index`, or at the end if there are
-    /// fewer columns, and focuses it.
+    /// fewer columns, pushing the columns from there right, and focuses it.
     pub fn insert_window_at(&mut self, id: WindowId, index: usize, width: f64, viewport: f64) {
         let index = index.min(self.columns.len());
         self.columns.insert(index, Column::new(id, clamp_width(width, viewport)));
         self.focused = index;
+    }
+
+    /// Puts `id` in place of column `target`, the columns in between
+    /// shifting over to make room, and focuses it. A stacked window leaves
+    /// its column for a column of its own.
+    pub fn move_window_to(&mut self, id: WindowId, target: usize) -> bool {
+        let Some((c, r)) = self.position(id) else { return false };
+        let target = target.min(self.columns.len() - 1);
+        if target == c {
+            return false;
+        }
+        if self.columns[c].windows.len() == 1 {
+            let column = self.columns.remove(c);
+            self.columns.insert(target, column);
+            self.focused = target;
+            return true;
+        }
+        let column = &mut self.columns[c];
+        column.windows.remove(r);
+        if column.focused_row >= column.windows.len() || r < column.focused_row {
+            column.focused_row = column.focused_row.saturating_sub(1);
+        }
+        let width = column.width;
+        // Column `c` stays, so moving right lands just past the target.
+        let index = if target > c { target + 1 } else { target };
+        self.columns.insert(index, Column::new(id, width));
+        self.focused = index;
+        true
     }
 
     /// Removes `id`, keeping focus on the nearest remaining window.
@@ -309,6 +337,14 @@ impl Workspace {
             .collect()
     }
 
+    /// The column under strip x `x`, or the nearest one; `None` for an
+    /// empty strip.
+    pub fn column_at(&self, x: f64, gap: f64) -> Option<usize> {
+        let xs = self.column_xs(gap);
+        let distance = |i: usize| (xs[i] - x).max(x - xs[i] - self.columns[i].width).max(0.0);
+        (0..self.columns.len()).min_by(|&a, &b| distance(a).total_cmp(&distance(b)))
+    }
+
     /// Focuses the column whose centre is closest to the viewport's.
     pub fn focus_nearest_centre(&mut self, viewport: f64, gap: f64) -> bool {
         let middle = self.scroll + viewport / 2.0;
@@ -365,6 +401,44 @@ mod tests {
 
     fn layout(ws: &Workspace) -> Vec<Vec<WindowId>> {
         ws.columns().iter().map(|c| c.windows().to_vec()).collect()
+    }
+
+    #[test]
+    fn moving_a_window_onto_a_column_takes_its_place() {
+        let mut ws = workspace(&[300.0, 300.0, 300.0, 300.0]);
+        assert!(ws.move_window_to(1, 2));
+        assert_eq!(layout(&ws), vec![vec![2], vec![3], vec![1], vec![4]]);
+        assert_eq!(ws.focused_window(), Some(1));
+        assert!(ws.move_window_to(4, 0));
+        assert_eq!(layout(&ws), vec![vec![4], vec![2], vec![3], vec![1]]);
+        assert!(!ws.move_window_to(4, 0));
+    }
+
+    #[test]
+    fn moving_a_stacked_window_gives_it_its_own_column() {
+        let mut ws = workspace(&[300.0, 200.0, 300.0]);
+        ws.focus_column(-1);
+        ws.consume();
+        assert_eq!(layout(&ws), vec![vec![1], vec![2, 3]]);
+        assert!(ws.move_window_to(3, 0));
+        assert_eq!(layout(&ws), vec![vec![3], vec![1], vec![2]]);
+        assert_eq!(ws.columns()[0].width(), 200.0);
+        ws.focus_window(3);
+        ws.consume();
+        assert_eq!(layout(&ws), vec![vec![3, 1], vec![2]]);
+        assert!(ws.move_window_to(3, 1));
+        assert_eq!(layout(&ws), vec![vec![1], vec![2], vec![3]]);
+        assert_eq!(ws.focused_window(), Some(3));
+    }
+
+    #[test]
+    fn column_at_finds_the_column_under_or_nearest_a_point() {
+        let ws = workspace(&[300.0, 300.0]);
+        assert_eq!(ws.column_at(-50.0, GAP), Some(0));
+        assert_eq!(ws.column_at(150.0, GAP), Some(0));
+        assert_eq!(ws.column_at(312.0, GAP), Some(1));
+        assert_eq!(ws.column_at(5000.0, GAP), Some(1));
+        assert_eq!(Workspace::default().column_at(0.0, GAP), None);
     }
 
     #[test]

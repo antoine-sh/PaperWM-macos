@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::animator::Animator;
 use crate::applier::FrameApplier;
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
-use crate::geometry::Rect;
+use crate::geometry::{Point, Rect};
 use crate::placement;
 use crate::workspace::{CenterFocus, Workspace};
 
@@ -433,6 +433,18 @@ impl Engine {
     /// focus, bringing in its workspace. Windows of apps the backend skipped,
     /// busy or unchanged, are kept as they were.
     pub fn sync(&mut self) -> Result<()> {
+        self.sync_dropping(None)
+    }
+
+    /// Syncs after the user let go of the mouse at `x`, `y` at the end of a
+    /// drag. A tiled window dragged there by its title bar moves into the
+    /// place of the column under the pointer, on whichever monitor that is;
+    /// the strip rearranges around it.
+    pub fn drop_at(&mut self, x: f64, y: f64) -> Result<()> {
+        self.sync_dropping(Some(Point { x, y }))
+    }
+
+    fn sync_dropping(&mut self, drop: Option<Point>) -> Result<()> {
         if self.monitors.is_empty() {
             return Ok(());
         }
@@ -490,24 +502,52 @@ impl Engine {
         let mut new: Vec<(WindowId, Rect)> =
             self.info.values().filter(|w| !managed.contains(&w.id)).map(|w| (w.id, w.frame)).collect();
         new.sort_by(|a, b| a.1.x.total_cmp(&b.1.x).then(a.0.cmp(&b.0)));
+        // Only the frontmost app's windows take focus; a window popped up by
+        // an app in the background opens beside the focused column, or in
+        // its slot, without moving focus or the strip.
+        let front = if new.is_empty() { None } else { self.backend.focused_app() };
+        // The window each touched workspace keeps focused.
+        let mut keep: HashMap<usize, Option<WindowId>> = HashMap::new();
         // Windows of one slotted app placed so far, so several arriving at
         // once keep their left-to-right order.
         let mut slotted: HashMap<String, usize> = HashMap::new();
         for (id, frame) in new {
             let app = &self.info[&id].app_name;
-            if let Some(&AppRule { workspace, column, .. }) =
-                self.config.rule_for(app).filter(|r| r.action == AppAction::Slot)
-            {
-                let placed = slotted.entry(app.clone()).or_default();
-                let monitor = self.monitors.iter().position(|m| m.workspace == workspace).unwrap_or(self.active);
-                let viewport = self.viewport(monitor);
-                self.workspaces[workspace].insert_window_at(id, column + *placed, frame.width, viewport);
-                *placed += 1;
-                continue;
-            }
-            let monitor = self.monitor_at(frame).unwrap_or(self.active);
+            let slot = self.config.rule_for(app).filter(|r| r.action == AppAction::Slot);
+            let (index, monitor) = match slot {
+                Some(rule) => {
+                    let monitor = self.monitors.iter().position(|m| m.workspace == rule.workspace);
+                    (rule.workspace, monitor.unwrap_or(self.active))
+                }
+                None => {
+                    let monitor = self.monitor_at(frame).unwrap_or(self.active);
+                    (self.monitors[monitor].workspace, monitor)
+                }
+            };
             let viewport = self.viewport(monitor);
-            self.workspaces[self.monitors[monitor].workspace].insert_window(id, frame.width, viewport);
+            let ws = &mut self.workspaces[index];
+            let kept = keep.entry(index).or_insert(ws.focused_window());
+            match slot {
+                Some(rule) => {
+                    let placed = slotted.entry(app.clone()).or_default();
+                    ws.insert_window_at(id, rule.column + *placed, frame.width, viewport);
+                    *placed += 1;
+                }
+                None => ws.insert_window(id, frame.width, viewport),
+            }
+            if front == Some(self.info[&id].pid) {
+                *kept = Some(id);
+            }
+        }
+        for (index, id) in keep {
+            if let Some(id) = id {
+                self.workspaces[index].focus_window(id);
+            }
+        }
+
+        if let Some(point) = drop {
+            let focused = self.backend.focused_window();
+            self.drop_window(point, focused, &fresh);
         }
         for (id, frame) in released {
             match self.backend.set_frame(id, frame) {
@@ -818,15 +858,49 @@ impl Engine {
         true
     }
 
+    /// Moves the tiled window that was dragged to `point`, if any, into the
+    /// place of the column under it. Returns whether one was.
+    fn drop_window(&mut self, point: Point, focused: Option<WindowId>, fresh: &HashSet<WindowId>) -> bool {
+        let Some(monitor) = self.monitors.iter().position(|m| m.area.contains(point)) else { return false };
+        let target = self.monitors[monitor].workspace;
+        // Clicking the title bar focused the dragged window, which moved
+        // without resizing and is still under the pointer. Sliding strips
+        // only have windows in motion.
+        let Some(id) = focused.filter(|id| fresh.contains(id)) else { return false };
+        let Some(source) = self.workspaces.iter().position(|w| w.contains(id)) else { return false };
+        let frame = self.info[&id].frame;
+        if !self.monitors.iter().any(|m| m.workspace == source)
+            || self.animator.is_moving(source)
+            || self.animator.is_moving(target)
+            || !frame.contains(point)
+            || !self.applier.moved(id, frame)
+        {
+            return false;
+        }
+        let gap = self.config.gap;
+        let strip_x = point.x - self.monitors[monitor].area.x - gap + self.animator.shown(target);
+        let column = self.workspaces[target].column_at(strip_x, gap).unwrap_or(0);
+        let moved = if source == target {
+            self.workspaces[target].move_window_to(id, column)
+        } else {
+            self.workspaces[source].remove_window(id);
+            let viewport = self.viewport(monitor);
+            self.workspaces[target].insert_window_at(id, column, self.info[&id].frame.width, viewport);
+            self.active = monitor;
+            true
+        };
+        // Wherever it lands, it goes there rather than back.
+        self.applier.forget(id);
+        moved
+    }
+
     fn viewport(&self, monitor: usize) -> f64 {
         self.monitors.get(monitor).map_or(0.0, |m| (m.area.width - 2.0 * self.config.gap).max(1.0))
     }
 
     fn monitor_at(&self, frame: Rect) -> Option<usize> {
-        let (cx, cy) = (frame.x + frame.width / 2.0, frame.y + frame.height / 2.0);
-        self.monitors
-            .iter()
-            .position(|m| cx >= m.area.x && cx < m.area.max_x() && cy >= m.area.y && cy < m.area.max_y())
+        let centre = Point { x: frame.x + frame.width / 2.0, y: frame.y + frame.height / 2.0 };
+        self.monitors.iter().position(|m| m.area.contains(centre))
     }
 
     fn ensure_visible_all(&mut self) {
@@ -924,6 +998,9 @@ mod tests {
         fn focused_window(&self) -> Option<WindowId> {
             self.0.focused_window()
         }
+        fn focused_app(&self) -> Option<i32> {
+            self.0.focused_app()
+        }
         fn focus(&self, id: WindowId) -> Result<()> {
             self.0.focus(id)
         }
@@ -986,6 +1063,53 @@ mod tests {
         engine.sync().unwrap();
         assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
         assert_eq!(backend.frame_of(2).unwrap().x, 316.0);
+    }
+
+    #[test]
+    fn background_app_window_keeps_focus_and_scroll() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 600.0), window(2, 100.0, 600.0)]);
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        // Focus on a dialog, which does not pin the strip's focus.
+        backend.add(WindowInfo { pid: 101, is_standard: false, ..window(9, 300.0, 200.0) });
+        backend.set_focused(Some(9));
+        engine.sync().unwrap();
+        let scroll = engine.workspace(0).unwrap().scroll();
+        let frame = backend.frame_of(1);
+
+        // App 103 is not frontmost.
+        backend.add(window(3, 900.0, 600.0));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![2]]);
+        assert_eq!(engine.workspace(0).unwrap().focused_window(), Some(1));
+        assert_eq!(engine.workspace(0).unwrap().scroll(), scroll);
+        assert_eq!(backend.frame_of(1), frame);
+        assert_eq!(backend.focused_window(), Some(9));
+
+        // Two at once keep their left-to-right order.
+        backend.add(window(4, 300.0, 300.0));
+        backend.add(window(5, 200.0, 300.0));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![5], vec![4], vec![3], vec![2]]);
+        assert_eq!(engine.workspace(0).unwrap().focused_window(), Some(1));
+    }
+
+    #[test]
+    fn frontmost_app_window_takes_focus() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 600.0), window(2, 100.0, 600.0)]);
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        backend.add(WindowInfo { pid: 101, is_standard: false, ..window(9, 300.0, 200.0) });
+        backend.set_focused(Some(9));
+        engine.sync().unwrap();
+
+        // Same app as the focused dialog.
+        backend.add(WindowInfo { pid: 101, ..window(3, 900.0, 600.0) });
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![2]]);
+        assert_eq!(engine.workspace(0).unwrap().focused_window(), Some(3));
     }
 
     #[test]
@@ -1626,6 +1750,94 @@ mod tests {
         backend.update(2, |w| w.frame = Rect::new(600.0, 200.0, 350.0, 250.0));
         engine.sync().unwrap();
         assert_eq!(backend.frame_of(2), Some(placed));
+    }
+
+    /// Drags window `id` by `dx` without resizing it.
+    fn drag(backend: &MockBackend, id: WindowId, dx: f64) {
+        backend.update(id, |w| w.frame.x += dx);
+    }
+
+    #[test]
+    fn window_dropped_on_another_column_takes_its_place() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0), window(3, 800.0, 300.0)]);
+        engine.sync().unwrap();
+        let third = backend.frame_of(3).unwrap();
+        drag(&backend, 1, 600.0);
+        backend.set_focused(Some(1));
+        engine.drop_at(700.0, 50.0).unwrap();
+        assert_eq!(columns(&engine), vec![vec![2], vec![3], vec![1]]);
+        assert_eq!(backend.frame_of(1), Some(third));
+        assert_eq!(backend.frame_of(2).unwrap().x, 8.0);
+    }
+
+    #[test]
+    fn window_dropped_on_its_own_column_goes_back() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        let placed = backend.frame_of(1).unwrap();
+        drag(&backend, 1, 100.0);
+        backend.set_focused(Some(1));
+        engine.drop_at(200.0, 50.0).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+        assert_eq!(backend.frame_of(1), Some(placed));
+    }
+
+    #[test]
+    fn resizing_or_clicking_rearranges_nothing() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        // Dragging the left edge moves and resizes.
+        backend.update(1, |w| {
+            w.frame.x += 400.0;
+            w.frame.width -= 100.0;
+        });
+        engine.drop_at(450.0, 50.0).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+        engine.drop_at(450.0, 50.0).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn only_the_focused_window_counts_as_dragged() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        // Window 1 strayed on its own, under where the user drags window 2.
+        drag(&backend, 1, 300.0);
+        drag(&backend, 2, 10.0);
+        backend.set_focused(Some(2));
+        engine.drop_at(350.0, 50.0).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn drop_on_a_sliding_strip_rearranges_nothing() {
+        let (mut engine, backend) = sliding_engine();
+        engine.command(Command::FocusFirst).unwrap();
+        engine.tick(0.05).unwrap();
+        // Window 1 dragged over window 2's place.
+        let over = backend.frame_of(2).unwrap().x - backend.frame_of(1).unwrap().x;
+        drag(&backend, 1, over);
+        backend.set_focused(Some(1));
+        engine.drop_at(backend.frame_of(2).unwrap().x + 10.0, 50.0).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2], vec![3]]);
+    }
+
+    #[test]
+    fn window_dropped_on_another_monitor_joins_its_strip() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 1200.0, 300.0)]);
+        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.sync().unwrap();
+        drag(&backend, 1, 1050.0);
+        backend.set_focused(Some(1));
+        engine.drop_at(1100.0, 100.0).unwrap();
+        assert!(columns(&engine).is_empty());
+        let right: Vec<Vec<WindowId>> =
+            engine.workspace(1).unwrap().columns().iter().map(|c| c.windows().to_vec()).collect();
+        assert_eq!(right, vec![vec![1], vec![2]]);
+        assert_eq!(engine.state().active_monitor, 1);
+        assert_eq!(backend.frame_of(1).unwrap().x, 1024.0);
     }
 
     #[test]
