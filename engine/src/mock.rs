@@ -13,6 +13,8 @@ pub struct MockBackend {
     trusted: bool,
     /// Like macOS, `focus` returns before focus has actually moved.
     focus_is_async: Cell<bool>,
+    /// Apps whose windows `windows` leaves out, as if they were busy.
+    unresponsive: RefCell<Vec<i32>>,
 }
 
 impl MockBackend {
@@ -60,6 +62,11 @@ impl MockBackend {
         self.focus_is_async.set(value);
     }
 
+    /// Makes `windows` skip the app `pid`'s windows and report it as busy.
+    pub fn set_unresponsive(&self, pids: Vec<i32>) {
+        *self.unresponsive.borrow_mut() = pids;
+    }
+
     pub fn frame_of(&self, id: WindowId) -> Option<Rect> {
         self.windows.borrow().iter().find(|w| w.id == id).map(|w| w.frame)
     }
@@ -78,7 +85,12 @@ impl WindowBackend for MockBackend {
         if !self.trusted {
             return Err(BackendError::NotTrusted);
         }
-        Ok(self.windows.borrow().clone())
+        let busy = self.unresponsive.borrow();
+        Ok(self.windows.borrow().iter().filter(|w| !busy.contains(&w.pid)).cloned().collect())
+    }
+
+    fn unresponsive_apps(&self) -> Vec<i32> {
+        self.unresponsive.borrow().clone()
     }
 
     fn set_frame(&self, id: WindowId, frame: Rect) -> Result<()> {
@@ -88,6 +100,9 @@ impl WindowBackend for MockBackend {
         self.set_frame_calls.set(self.set_frame_calls.get() + 1);
         let mut windows = self.windows.borrow_mut();
         let window = windows.iter_mut().find(|w| w.id == id).ok_or(BackendError::WindowNotFound(id))?;
+        if self.unresponsive.borrow().contains(&window.pid) {
+            return Err(BackendError::Platform("app is not responding".into()));
+        }
         window.frame = frame;
         Ok(())
     }
@@ -95,6 +110,11 @@ impl WindowBackend for MockBackend {
     fn set_position(&self, id: WindowId, x: f64, y: f64) -> Result<()> {
         let size = self.frame_of(id).ok_or(BackendError::WindowNotFound(id))?;
         self.set_frame(id, Rect { x, y, ..size })
+    }
+
+    fn set_size(&self, id: WindowId, width: f64, height: f64) -> Result<()> {
+        let origin = self.frame_of(id).ok_or(BackendError::WindowNotFound(id))?;
+        self.set_frame(id, Rect { width, height, ..origin })
     }
 
     fn focused_window(&self) -> Option<WindowId> {

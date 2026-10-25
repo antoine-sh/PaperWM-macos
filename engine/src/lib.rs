@@ -4,6 +4,8 @@
 //! static library and talks to it through the C interface in [`ffi`], whose
 //! declarations live in `include/paperwm_engine.h`.
 
+pub mod animator;
+pub mod applier;
 pub mod backend;
 pub mod engine;
 pub mod ffi;
