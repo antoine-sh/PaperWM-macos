@@ -12,6 +12,8 @@ final class WindowManager {
     }
     /// Called with the new layout after every sync or command.
     var onStateChange: ((EngineState) -> Void)?
+    private let minimap = Minimap()
+    private lazy var modifiers = ModifierWatcher { [weak self] in self?.minimap.hide() }
     private var syncScheduled = false
 
     func start() {
@@ -41,6 +43,7 @@ final class WindowManager {
         report { try engine.setConfig(json: settings.engineConfigJSON) }
         updateMonitors()
         hotKeys.register(settings.hotKeys)
+        modifiers.start()
     }
 
     /// Pauses global shortcuts, e.g. while one is being recorded.
@@ -56,7 +59,7 @@ final class WindowManager {
         switch action {
         case .engine(let command, let arg):
             report { try engine.run(command, arg: arg) }
-            publish()
+            if let state = publish() { minimap.show(state) }
         case .switcher:
             break
         }
@@ -68,8 +71,11 @@ final class WindowManager {
         publish()
     }
 
-    private func publish() {
-        if let state = engine.state() { onStateChange?(state) }
+    @discardableResult
+    private func publish() -> EngineState? {
+        guard let state = engine.state() else { return nil }
+        onStateChange?(state)
+        return state
     }
 
     /// Syncs on the next run loop turn, coalescing bursts of notifications.
