@@ -14,6 +14,7 @@ final class WindowManager {
     var onStateChange: ((EngineState) -> Void)?
     private let minimap = Minimap()
     private let switcher = Switcher()
+    private lazy var gestures = Gestures { [weak self] action in self?.perform(action) }
     private lazy var modifiers = ModifierWatcher { [weak self] in self?.superReleased() }
     private var syncScheduled = false
 
@@ -45,6 +46,7 @@ final class WindowManager {
         updateMonitors()
         hotKeys.register(settings.hotKeys)
         modifiers.start()
+        gestures.start()
     }
 
     /// Pauses global shortcuts, e.g. while one is being recorded.
@@ -63,7 +65,9 @@ final class WindowManager {
             switcher.cancel()
         case .engine(let command, let arg):
             report { try engine.run(command, arg: arg) }
-            if let state = publish() { minimap.show(state) }
+            // Redrawing the minimap for every scroll event is too costly; it
+            // shows when the pan ends.
+            if let state = publish(), command != PWM_COMMAND_SCROLL_BY { minimap.show(state) }
         case .switcher(let forward):
             guard let state = engine.state() else { return }
             minimap.hide()
