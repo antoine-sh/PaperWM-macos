@@ -7,9 +7,7 @@ struct SettingsView: View {
     @ObservedObject var settings: Settings
     /// Shortcut ids macOS refused to register.
     let failed: Set<String>
-    /// Called with true while a shortcut is being recorded, so global
-    /// shortcuts can step aside.
-    let onRecording: (Bool) -> Void
+    @ObservedObject var recorder: ShortcutRecorder
 
     @State private var presetsText = ""
 
@@ -49,7 +47,15 @@ struct SettingsView: View {
                         .foregroundStyle(.orange)
                         .help("Another app uses this shortcut")
                 }
-                ShortcutRecorder(combo: binding(for: hotKey), onRecording: onRecording)
+                let combo = binding(for: hotKey)
+                Button(recorder.recording == hotKey.id ? "Press keys…" : combo.wrappedValue.symbol) {
+                    if recorder.recording == hotKey.id {
+                        recorder.stop()
+                    } else {
+                        recorder.start(hotKey.id) { combo.wrappedValue = $0 }
+                    }
+                }
+                .frame(minWidth: 110)
                 Button("Reset") { settings.values.shortcuts[hotKey.id] = nil }
                     .disabled(settings.values.shortcuts[hotKey.id] == nil)
             }
@@ -78,38 +84,43 @@ struct SettingsView: View {
     }
 }
 
-/// A button showing a shortcut; click it and press keys to change it, or
-/// Esc to cancel.
-struct ShortcutRecorder: View {
-    @Binding var combo: KeyCombo
-    let onRecording: (Bool) -> Void
-    @State private var monitor: Any?
+/// Records one shortcut at a time: after `start`, the next key press with
+/// ⌃, ⌥ or ⌘ becomes the shortcut, and Esc cancels. Global shortcuts step
+/// aside while recording, since they would swallow the keys.
+@MainActor
+final class ShortcutRecorder: ObservableObject {
+    /// Id of the shortcut being recorded.
+    @Published private(set) var recording: String?
+    private var monitor: Any?
+    private let onRecording: (Bool) -> Void
 
-    var body: some View {
-        Button(monitor == nil ? combo.symbol : "Press keys…") {
-            monitor == nil ? start() : stop()
-        }
-        .frame(minWidth: 110)
+    init(onRecording: @escaping (Bool) -> Void) {
+        self.onRecording = onRecording
     }
 
-    private func start() {
+    func start(_ id: String, onCombo: @escaping (KeyCombo) -> Void) {
+        stop()
+        recording = id
         onRecording(true)
-        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            let modifiers = Self.carbonModifiers(event.modifierFlags)
-            if event.keyCode == UInt16(kVK_Escape) && modifiers == 0 {
-                stop()
-            } else if modifiers & ~shiftKey != 0 {
-                // A global shortcut needs ⌃, ⌥ or ⌘.
-                combo = KeyCombo(keyCode: Int(event.keyCode), modifiers: modifiers)
-                stop()
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            MainActor.assumeIsolated {
+                let modifiers = Self.carbonModifiers(event.modifierFlags)
+                if event.keyCode == UInt16(kVK_Escape) && modifiers == 0 {
+                    self?.stop()
+                } else if modifiers & ~shiftKey != 0 {
+                    onCombo(KeyCombo(keyCode: Int(event.keyCode), modifiers: modifiers))
+                    self?.stop()
+                }
             }
             return nil
         }
     }
 
-    private func stop() {
-        if let monitor { NSEvent.removeMonitor(monitor) }
-        monitor = nil
+    func stop() {
+        guard let monitor else { return }
+        NSEvent.removeMonitor(monitor)
+        self.monitor = nil
+        recording = nil
         onRecording(false)
     }
 
@@ -125,11 +136,15 @@ struct ShortcutRecorder: View {
 
 /// Owns the Settings window so it can be reopened.
 @MainActor
-final class SettingsWindowController {
+final class SettingsWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
+    private var recorder: ShortcutRecorder?
 
     func show(settings: Settings, failed: Set<String>, onRecording: @escaping (Bool) -> Void) {
-        let view = SettingsView(settings: settings, failed: failed, onRecording: onRecording)
+        recorder?.stop()
+        let recorder = ShortcutRecorder(onRecording: onRecording)
+        self.recorder = recorder
+        let view = SettingsView(settings: settings, failed: failed, recorder: recorder)
         if let window {
             window.contentViewController = NSHostingController(rootView: view)
         } else {
@@ -137,10 +152,16 @@ final class SettingsWindowController {
             window.title = "PaperWM Settings"
             window.styleMask = [.titled, .closable]
             window.isReleasedWhenClosed = false
+            window.delegate = self
             self.window = window
         }
         NSApp.activate()
         window?.center()
         window?.makeKeyAndOrderFront(nil)
+    }
+
+    // Closing mid-recording must give the global shortcuts back.
+    func windowWillClose(_ notification: Notification) {
+        recorder?.stop()
     }
 }

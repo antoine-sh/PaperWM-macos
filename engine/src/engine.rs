@@ -447,6 +447,11 @@ impl Engine {
         if raise.is_empty() {
             raise.extend(after.filter(|&id| Some(id) != before));
         }
+        if after.is_none() && raise.is_empty() {
+            // Nothing to focus here, so macOS keeps focus on a window we just
+            // hid or left; following it on the next sync would undo this.
+            self.stale_focus = self.backend.focused_window();
+        }
         for id in raise {
             self.focus(id)?;
         }
@@ -1137,6 +1142,38 @@ mod tests {
         assert_eq!(backend.focused_window(), Some(1));
         assert_eq!(engine.command(Command::FocusLast), Ok(true));
         assert_eq!(backend.focused_window(), Some(3));
+    }
+
+    #[test]
+    fn switch_to_empty_workspace_survives_sync() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.command(Command::SwitchWorkspace(4)).unwrap();
+        // macOS still reports the now hidden window as focused.
+        engine.sync().unwrap();
+        assert_eq!(shown(&engine), vec![4]);
+    }
+
+    #[test]
+    fn moving_last_window_away_survives_sync() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.command(Command::MoveToWorkspace(4)).unwrap();
+        engine.sync().unwrap();
+        assert_eq!(shown(&engine), vec![0]);
+    }
+
+    #[test]
+    fn focusing_monitor_with_empty_workspace_survives_sync() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.command(Command::FocusMonitorRight).unwrap();
+        engine.sync().unwrap();
+        assert_eq!(engine.state().active_monitor, 1);
     }
 
     #[test]

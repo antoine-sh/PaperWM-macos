@@ -17,6 +17,10 @@ final class WindowManager {
     private lazy var gestures = Gestures { [weak self] action in self?.perform(action) }
     private lazy var modifiers = ModifierWatcher { [weak self] in self?.superReleased() }
     private var syncScheduled = false
+    private var hotKeysPaused = false
+    /// What was last applied, so settings edits only redo what changed.
+    private var appliedConfig = ""
+    private var appliedShortcuts: [KeyCombo] = []
 
     func start() {
         let context = Unmanaged.passUnretained(self).toOpaque()
@@ -42,15 +46,15 @@ final class WindowManager {
             engine.observeApp(app.processIdentifier)
         }
         settings.onChange = { [weak self] in self?.applySettings() }
-        report { try engine.setConfig(json: settings.engineConfigJSON) }
+        applySettings()
         updateMonitors()
-        hotKeys.register(settings.hotKeys)
         modifiers.start()
         gestures.start()
     }
 
     /// Pauses global shortcuts, e.g. while one is being recorded.
     func setHotKeysPaused(_ paused: Bool) {
+        hotKeysPaused = paused
         if paused {
             hotKeys.unregisterAll()
         } else {
@@ -86,9 +90,17 @@ final class WindowManager {
     }
 
     private func applySettings() {
-        report { try engine.setConfig(json: settings.engineConfigJSON) }
-        hotKeys.register(settings.hotKeys)
-        publish()
+        let config = settings.engineConfigJSON
+        if config != appliedConfig {
+            appliedConfig = config
+            report { try engine.setConfig(json: config) }
+            publish()
+        }
+        let shortcuts = settings.hotKeys.map(\.combo)
+        if shortcuts != appliedShortcuts {
+            appliedShortcuts = shortcuts
+            if !hotKeysPaused { hotKeys.register(settings.hotKeys) }
+        }
     }
 
     @discardableResult
