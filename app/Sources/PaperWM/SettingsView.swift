@@ -24,6 +24,8 @@ struct SettingsView: View {
     private var layout: some View {
         Form {
             Stepper("Gap: \(Int(settings.values.gap)) pt", value: $settings.values.gap, in: 0...64, step: 2)
+            Stepper("Scroll animation: \(Int((settings.values.animationDuration * 1000).rounded())) ms",
+                    value: $settings.values.animationDuration, in: 0...1, step: 0.05)
             TextField("Column widths (% of screen)", text: $presetsText)
                 .onSubmit {
                     if let presets = Self.parse(presetsText) { settings.values.widthPresets = presets }
