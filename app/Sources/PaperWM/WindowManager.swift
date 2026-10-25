@@ -6,10 +6,21 @@ import CPaperWMEngine
 @MainActor
 final class WindowManager {
     let engine = Engine()
-    private(set) lazy var hotKeys = HotKeyCenter(hotKeys: HotKey.defaults) { [weak self] command in
-        self?.run(command)
+    let settings = Settings()
+    private(set) lazy var hotKeys = HotKeyCenter { [weak self] action in
+        self?.perform(action)
     }
+    /// Called with the new layout after every sync or command.
+    var onStateChange: ((EngineState) -> Void)?
+    private let minimap = Minimap()
+    private let switcher = Switcher()
+    private lazy var gestures = Gestures { [weak self] action in self?.perform(action) }
+    private lazy var modifiers = ModifierWatcher { [weak self] in self?.superReleased() }
     private var syncScheduled = false
+    private var hotKeysPaused = false
+    /// What was last applied, so settings edits only redo what changed.
+    private var appliedConfig = ""
+    private var appliedShortcuts: [KeyCombo] = []
 
     func start() {
         let context = Unmanaged.passUnretained(self).toOpaque()
@@ -34,8 +45,69 @@ final class WindowManager {
         for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
             engine.observeApp(app.processIdentifier)
         }
+        settings.onChange = { [weak self] in self?.applySettings() }
+        applySettings()
         updateMonitors()
-        hotKeys.register()
+        modifiers.start()
+        gestures.start()
+    }
+
+    /// Pauses global shortcuts, e.g. while one is being recorded.
+    func setHotKeysPaused(_ paused: Bool) {
+        hotKeysPaused = paused
+        if paused {
+            hotKeys.unregisterAll()
+        } else {
+            hotKeys.register(settings.hotKeys)
+        }
+    }
+
+    func perform(_ action: Action) {
+        switch action {
+        case .engine(PWM_COMMAND_TOGGLE_SCRATCH, _) where switcher.isOpen:
+            // ⌃⌥Esc while switching cancels, as Esc does in PaperWM.
+            switcher.cancel()
+        case .engine(let command, let arg):
+            report { try engine.run(command, arg: arg) }
+            // Redrawing the minimap for every scroll event is too costly; it
+            // shows when the pan ends.
+            if let state = publish(), command != PWM_COMMAND_SCROLL_BY { minimap.show(state) }
+        case .switcher(let forward):
+            guard let state = engine.state() else { return }
+            minimap.hide()
+            switcher.step(forward: forward, state: state)
+            // A quick tap that is already over switches straight away.
+            if !ModifierWatcher.superHeld { superReleased() }
+        }
+    }
+
+    private func superReleased() {
+        minimap.hide()
+        if let id = switcher.commit() {
+            perform(.engine(PWM_COMMAND_FOCUS_WINDOW, Double(id)))
+            minimap.hide()
+        }
+    }
+
+    private func applySettings() {
+        let config = settings.engineConfigJSON
+        if config != appliedConfig {
+            appliedConfig = config
+            report { try engine.setConfig(json: config) }
+            publish()
+        }
+        let shortcuts = settings.hotKeys.map(\.combo)
+        if shortcuts != appliedShortcuts {
+            appliedShortcuts = shortcuts
+            if !hotKeysPaused { hotKeys.register(settings.hotKeys) }
+        }
+    }
+
+    @discardableResult
+    private func publish() -> EngineState? {
+        guard let state = engine.state() else { return nil }
+        onStateChange?(state)
+        return state
     }
 
     /// Syncs on the next run loop turn, coalescing bursts of notifications.
@@ -50,10 +122,7 @@ final class WindowManager {
 
     func syncNow() {
         report { try engine.sync() }
-    }
-
-    private func run(_ command: PwmCommand) {
-        report { try engine.run(command) }
+        publish()
     }
 
     private func updateMonitors() {
@@ -61,6 +130,7 @@ final class WindowManager {
             try engine.setMonitors(NSScreen.screens.map(\.accessibilityVisibleFrame))
             try engine.sync()
         }
+        publish()
     }
 
     private func report(_ body: () throws -> Void) {

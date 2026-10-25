@@ -32,6 +32,17 @@ pub fn frames(workspace: &Workspace, area: Rect, gap: f64, other_monitors: &[Rec
     result
 }
 
+/// Where a window of a hidden workspace goes: `frame`'s size, tucked into
+/// the bottom-right corner of the monitor reaching furthest right and down,
+/// where it is least likely to overlap another monitor.
+// shortcut: assumes no monitor lies right of or below that corner; upgrade
+// to a per-arrangement search if users report hidden windows showing.
+pub fn hidden_frame(frame: Rect, monitors: &[Rect]) -> Rect {
+    let corner = monitors.iter().max_by(|a, b| (a.max_x() + a.max_y()).total_cmp(&(b.max_x() + b.max_y())));
+    let Some(area) = corner else { return frame };
+    Rect { x: area.max_x() - PEEK, y: area.max_y() - PEEK, ..frame }
+}
+
 fn needs_parking(rect: Rect, area: Rect, other_monitors: &[Rect]) -> bool {
     let outside = rect.max_x() <= area.x || rect.x >= area.max_x();
     let spills =
@@ -69,6 +80,14 @@ mod tests {
             ws.insert_window(i as WindowId + 1, w, VIEW);
         }
         ws
+    }
+
+    #[test]
+    fn hidden_frame_uses_the_far_bottom_right_monitor() {
+        let lower_right = Rect::new(1020.0, 100.0, 800.0, 600.0);
+        let frame = Rect::new(5.0, 5.0, 300.0, 200.0);
+        assert_eq!(hidden_frame(frame, &[AREA]), Rect::new(AREA.max_x() - PEEK, AREA.max_y() - PEEK, 300.0, 200.0));
+        assert_eq!(hidden_frame(frame, &[AREA, lower_right]), Rect::new(1820.0 - PEEK, 700.0 - PEEK, 300.0, 200.0));
     }
 
     #[test]

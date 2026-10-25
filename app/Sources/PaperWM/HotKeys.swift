@@ -1,47 +1,130 @@
 import Carbon.HIToolbox
+import Foundation
 import CPaperWMEngine
 
-/// A global keyboard shortcut bound to an engine command.
-struct HotKey {
-    let keyCode: Int
-    let modifiers: Int
-    let command: PwmCommand
-    let title: String
+/// What a shortcut does.
+enum Action: Equatable {
+    case engine(PwmCommand, Double = 0)
+    /// Opens the window switcher, or steps it forward or back.
+    case switcher(forward: Bool)
+}
 
-    /// Shortcut as shown in menus, e.g. "⌃⌥←".
+/// A key and Carbon modifier mask (`controlKey | optionKey`, …).
+struct KeyCombo: Codable, Equatable {
+    var keyCode: Int
+    var modifiers: Int
+
+    /// As shown in menus, e.g. "⌃⌥←".
     var symbol: String {
         var text = ""
         if modifiers & controlKey != 0 { text += "⌃" }
         if modifiers & optionKey != 0 { text += "⌥" }
         if modifiers & shiftKey != 0 { text += "⇧" }
         if modifiers & cmdKey != 0 { text += "⌘" }
-        return text + (HotKey.keyNames[keyCode] ?? "?")
+        return text + (KeyCombo.keyNames[keyCode] ?? "#\(keyCode)")
     }
 
-    private static let keyNames: [Int: String] = [
-        kVK_LeftArrow: "←", kVK_RightArrow: "→", kVK_UpArrow: "↑", kVK_DownArrow: "↓",
-        kVK_ANSI_R: "R", kVK_ANSI_F: "F", kVK_ANSI_C: "C", kVK_ANSI_I: "I", kVK_ANSI_O: "O",
+    private static let keyNames: [Int: String] = {
+        var names: [Int: String] = [
+            kVK_LeftArrow: "←", kVK_RightArrow: "→", kVK_UpArrow: "↑", kVK_DownArrow: "↓",
+            kVK_PageUp: "⇞", kVK_PageDown: "⇟", kVK_Home: "↖", kVK_End: "↘",
+            kVK_Escape: "⎋", kVK_Tab: "⇥", kVK_Return: "↩", kVK_Space: "Space", kVK_Delete: "⌫",
+            kVK_ANSI_Grave: "`", kVK_ANSI_Minus: "-", kVK_ANSI_Equal: "=", kVK_ANSI_LeftBracket: "[",
+            kVK_ANSI_RightBracket: "]", kVK_ANSI_Semicolon: ";", kVK_ANSI_Quote: "'", kVK_ANSI_Comma: ",",
+            kVK_ANSI_Period: ".", kVK_ANSI_Slash: "/", kVK_ANSI_Backslash: "\\",
+        ]
+        let letters = [
+            kVK_ANSI_A, kVK_ANSI_B, kVK_ANSI_C, kVK_ANSI_D, kVK_ANSI_E, kVK_ANSI_F, kVK_ANSI_G, kVK_ANSI_H,
+            kVK_ANSI_I, kVK_ANSI_J, kVK_ANSI_K, kVK_ANSI_L, kVK_ANSI_M, kVK_ANSI_N, kVK_ANSI_O, kVK_ANSI_P,
+            kVK_ANSI_Q, kVK_ANSI_R, kVK_ANSI_S, kVK_ANSI_T, kVK_ANSI_U, kVK_ANSI_V, kVK_ANSI_W, kVK_ANSI_X,
+            kVK_ANSI_Y, kVK_ANSI_Z,
+        ]
+        for (i, code) in letters.enumerated() {
+            names[code] = String(UnicodeScalar(UInt8(65 + i)))
+        }
+        for (i, code) in HotKey.digitKeys.enumerated() {
+            names[code] = String(i)
+        }
+        let functionKeys = [
+            kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10, kVK_F11, kVK_F12,
+        ]
+        for (i, code) in functionKeys.enumerated() {
+            names[code] = "F\(i + 1)"
+        }
+        return names
+    }()
+}
+
+/// A global keyboard shortcut.
+struct HotKey {
+    /// Stable name used to store the user's override, e.g. "focus-left".
+    let id: String
+    let title: String
+    let action: Action
+    var combo: KeyCombo
+
+    static let digitKeys = [
+        kVK_ANSI_0, kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4,
+        kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9,
     ]
 
-    /// PaperWM's default bindings, with ⌃⌥ standing in for Super.
+    /// PaperWM's default bindings, with ⌃⌥ standing in for Super and ⌃⌥⌘ for
+    /// Super+Ctrl.
     static let defaults: [HotKey] = {
         let base = controlKey | optionKey
-        let move = base | shiftKey
-        return [
-            HotKey(keyCode: kVK_LeftArrow, modifiers: base, command: PWM_COMMAND_FOCUS_LEFT, title: "Focus Left"),
-            HotKey(keyCode: kVK_RightArrow, modifiers: base, command: PWM_COMMAND_FOCUS_RIGHT, title: "Focus Right"),
-            HotKey(keyCode: kVK_UpArrow, modifiers: base, command: PWM_COMMAND_FOCUS_UP, title: "Focus Up"),
-            HotKey(keyCode: kVK_DownArrow, modifiers: base, command: PWM_COMMAND_FOCUS_DOWN, title: "Focus Down"),
-            HotKey(keyCode: kVK_LeftArrow, modifiers: move, command: PWM_COMMAND_MOVE_LEFT, title: "Move Column Left"),
-            HotKey(keyCode: kVK_RightArrow, modifiers: move, command: PWM_COMMAND_MOVE_RIGHT, title: "Move Column Right"),
-            HotKey(keyCode: kVK_UpArrow, modifiers: move, command: PWM_COMMAND_MOVE_UP, title: "Move Window Up"),
-            HotKey(keyCode: kVK_DownArrow, modifiers: move, command: PWM_COMMAND_MOVE_DOWN, title: "Move Window Down"),
-            HotKey(keyCode: kVK_ANSI_R, modifiers: base, command: PWM_COMMAND_CYCLE_WIDTH, title: "Cycle Column Width"),
-            HotKey(keyCode: kVK_ANSI_F, modifiers: base, command: PWM_COMMAND_TOGGLE_FULL_WIDTH, title: "Toggle Full Width"),
-            HotKey(keyCode: kVK_ANSI_C, modifiers: base, command: PWM_COMMAND_CENTER, title: "Center Column"),
-            HotKey(keyCode: kVK_ANSI_I, modifiers: base, command: PWM_COMMAND_CONSUME, title: "Pull Next Window into Column"),
-            HotKey(keyCode: kVK_ANSI_O, modifiers: base, command: PWM_COMMAND_EXPEL, title: "Push Window out of Column"),
+        let shift = base | shiftKey
+        let ctrl = base | cmdKey
+        func key(_ id: String, _ title: String, _ keyCode: Int, _ modifiers: Int, _ action: Action) -> HotKey {
+            HotKey(id: id, title: title, action: action, combo: KeyCombo(keyCode: keyCode, modifiers: modifiers))
+        }
+        var keys = [
+            key("focus-left", "Focus Left", kVK_LeftArrow, base, .engine(PWM_COMMAND_FOCUS_LEFT)),
+            key("focus-right", "Focus Right", kVK_RightArrow, base, .engine(PWM_COMMAND_FOCUS_RIGHT)),
+            key("focus-up", "Focus Up", kVK_UpArrow, base, .engine(PWM_COMMAND_FOCUS_UP)),
+            key("focus-down", "Focus Down", kVK_DownArrow, base, .engine(PWM_COMMAND_FOCUS_DOWN)),
+            key("focus-first", "Focus First Column", kVK_Home, base, .engine(PWM_COMMAND_FOCUS_FIRST)),
+            key("focus-last", "Focus Last Column", kVK_End, base, .engine(PWM_COMMAND_FOCUS_LAST)),
+            key("move-left", "Move Column Left", kVK_LeftArrow, shift, .engine(PWM_COMMAND_MOVE_LEFT)),
+            key("move-right", "Move Column Right", kVK_RightArrow, shift, .engine(PWM_COMMAND_MOVE_RIGHT)),
+            key("move-up", "Move Window Up", kVK_UpArrow, shift, .engine(PWM_COMMAND_MOVE_UP)),
+            key("move-down", "Move Window Down", kVK_DownArrow, shift, .engine(PWM_COMMAND_MOVE_DOWN)),
+            key("cycle-width", "Cycle Column Width", kVK_ANSI_R, base, .engine(PWM_COMMAND_CYCLE_WIDTH)),
+            key("full-width", "Toggle Full Width", kVK_ANSI_F, base, .engine(PWM_COMMAND_TOGGLE_FULL_WIDTH)),
+            key("center", "Center Column", kVK_ANSI_C, base, .engine(PWM_COMMAND_CENTER)),
+            key("consume", "Pull Next Window into Column", kVK_ANSI_I, base, .engine(PWM_COMMAND_CONSUME)),
+            key("expel", "Push Window out of Column", kVK_ANSI_O, base, .engine(PWM_COMMAND_EXPEL)),
+            key("switcher", "Switch Windows", kVK_Tab, base, .switcher(forward: true)),
+            key("switcher-back", "Switch Windows Backwards", kVK_Tab, shift, .switcher(forward: false)),
+            key("next-workspace", "Next Workspace", kVK_PageDown, base, .engine(PWM_COMMAND_NEXT_WORKSPACE)),
+            key("previous-workspace", "Previous Workspace", kVK_PageUp, base,
+                .engine(PWM_COMMAND_PREVIOUS_WORKSPACE)),
+            key("last-workspace", "Last Used Workspace", kVK_ANSI_Grave, base, .engine(PWM_COMMAND_LAST_WORKSPACE)),
+            key("move-to-next-workspace", "Move Window to Next Workspace", kVK_PageDown, shift,
+                .engine(PWM_COMMAND_MOVE_TO_NEXT_WORKSPACE)),
+            key("move-to-previous-workspace", "Move Window to Previous Workspace", kVK_PageUp, shift,
+                .engine(PWM_COMMAND_MOVE_TO_PREVIOUS_WORKSPACE)),
+            key("focus-monitor-left", "Focus Monitor Left", kVK_LeftArrow, ctrl,
+                .engine(PWM_COMMAND_FOCUS_MONITOR_LEFT)),
+            key("focus-monitor-right", "Focus Monitor Right", kVK_RightArrow, ctrl,
+                .engine(PWM_COMMAND_FOCUS_MONITOR_RIGHT)),
+            key("move-to-monitor-left", "Move Window to Monitor Left", kVK_LeftArrow, ctrl | shiftKey,
+                .engine(PWM_COMMAND_MOVE_TO_MONITOR_LEFT)),
+            key("move-to-monitor-right", "Move Window to Monitor Right", kVK_RightArrow, ctrl | shiftKey,
+                .engine(PWM_COMMAND_MOVE_TO_MONITOR_RIGHT)),
+            key("toggle-scratch", "Show or Hide Scratch Layer", kVK_Escape, base,
+                .engine(PWM_COMMAND_TOGGLE_SCRATCH)),
+            key("move-to-scratch", "Move Window to or from Scratch Layer", kVK_Escape, shift,
+                .engine(PWM_COMMAND_MOVE_TO_SCRATCH)),
         ]
+        for n in 1...9 {
+            keys.append(key("switch-workspace-\(n)", "Switch to Workspace \(n)", digitKeys[n], base,
+                            .engine(PWM_COMMAND_SWITCH_WORKSPACE, Double(n - 1))))
+        }
+        for n in 1...9 {
+            keys.append(key("move-to-workspace-\(n)", "Move Window to Workspace \(n)", digitKeys[n], shift,
+                            .engine(PWM_COMMAND_MOVE_TO_WORKSPACE, Double(n - 1))))
+        }
+        return keys
     }()
 }
 
@@ -49,20 +132,50 @@ struct HotKey {
 /// extra permission.
 @MainActor
 final class HotKeyCenter {
-    let hotKeys: [HotKey]
-    private let action: (PwmCommand) -> Void
+    private(set) var hotKeys: [HotKey] = []
+    /// Ids of shortcuts macOS refused, usually because another app owns them.
+    private(set) var failed: Set<String> = []
+    private let action: (Action) -> Void
     private var registrations: [EventHotKeyRef] = []
     private var handler: EventHandlerRef?
 
     /// Arbitrary four-character signature identifying our hot keys ("PWM1").
     private static let signature: OSType = 0x5057_4D31
 
-    init(hotKeys: [HotKey], action: @escaping (PwmCommand) -> Void) {
-        self.hotKeys = hotKeys
+    init(action: @escaping (Action) -> Void) {
         self.action = action
     }
 
-    func register() {
+    /// Replaces the registered shortcuts with `hotKeys`.
+    func register(_ hotKeys: [HotKey]) {
+        installHandler()
+        unregisterAll()
+        self.hotKeys = hotKeys
+        failed = []
+        for (index, hotKey) in hotKeys.enumerated() {
+            var ref: EventHotKeyRef?
+            let id = EventHotKeyID(signature: HotKeyCenter.signature, id: UInt32(index))
+            let status = RegisterEventHotKey(
+                UInt32(hotKey.combo.keyCode), UInt32(hotKey.combo.modifiers), id, GetApplicationEventTarget(), 0, &ref
+            )
+            if status == noErr, let ref {
+                registrations.append(ref)
+            } else {
+                failed.insert(hotKey.id)
+                NSLog("PaperWM: could not register \(hotKey.combo.symbol) (\(status)); another app may own it")
+            }
+        }
+    }
+
+    /// Releases every shortcut, e.g. so a shortcut recorder sees the keys.
+    func unregisterAll() {
+        for ref in registrations {
+            UnregisterEventHotKey(ref)
+        }
+        registrations = []
+    }
+
+    private func installHandler() {
         guard handler == nil else { return }
         var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
         let context = Unmanaged.passUnretained(self).toOpaque()
@@ -78,23 +191,10 @@ final class HotKeyCenter {
             MainActor.assumeIsolated { center.fire(Int(id.id)) }
             return noErr
         }, 1, &spec, context, &handler)
-
-        for (index, hotKey) in hotKeys.enumerated() {
-            var ref: EventHotKeyRef?
-            let id = EventHotKeyID(signature: HotKeyCenter.signature, id: UInt32(index))
-            let status = RegisterEventHotKey(
-                UInt32(hotKey.keyCode), UInt32(hotKey.modifiers), id, GetApplicationEventTarget(), 0, &ref
-            )
-            if status == noErr, let ref {
-                registrations.append(ref)
-            } else {
-                NSLog("PaperWM: could not register \(hotKey.symbol) (\(status)); another app may own it")
-            }
-        }
     }
 
     private func fire(_ index: Int) {
         guard hotKeys.indices.contains(index) else { return }
-        action(hotKeys[index].command)
+        action(hotKeys[index].action)
     }
 }
