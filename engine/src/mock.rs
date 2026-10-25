@@ -89,7 +89,7 @@ impl WindowBackend for MockBackend {
         Ok(self.windows.borrow().iter().filter(|w| !busy.contains(&w.pid)).cloned().collect())
     }
 
-    fn unresponsive_apps(&self) -> Vec<i32> {
+    fn skipped_apps(&self) -> Vec<i32> {
         self.unresponsive.borrow().clone()
     }
 

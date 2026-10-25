@@ -11,7 +11,9 @@ enum Thumbnails {
     static func capture(ids: [UInt32], maxSize: CGFloat,
                         onImage: @escaping @MainActor (UInt32, CGImage) -> Void) async {
         guard hasAccess,
-              let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+              // Every managed window is on screen, if only by the sliver of a
+              // parked one, so windows on other Spaces need not be listed.
+              let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
         else { return }
         let wanted = Set(ids)
         await withTaskGroup(of: (UInt32, CGImage?).self) { group in

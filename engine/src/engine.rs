@@ -261,8 +261,13 @@ impl Engine {
         self.backend.as_ref()
     }
 
+    /// Every window, read afresh.
     pub fn windows(&self) -> Result<Vec<WindowInfo>> {
-        self.backend.windows()
+        self.backend.invalidate();
+        let windows = self.backend.windows();
+        // The next sync must see what this call read.
+        self.backend.invalidate();
+        windows
     }
 
     pub fn config(&self) -> &Config {
@@ -370,6 +375,7 @@ impl Engine {
         self.active = self.active.min(self.monitors.len() - 1);
         // macOS moves windows itself when displays change.
         self.applier.clear();
+        self.backend.invalidate();
         self.ensure_visible_all();
         self.snap_all();
         self.apply()
@@ -378,8 +384,8 @@ impl Engine {
     /// Reconciles the layout with the windows that exist now: adds new ones
     /// next to the focused column, drops closed or minimized ones, puts back
     /// tiled windows that were moved, and follows the system's keyboard
-    /// focus, bringing in its workspace. Windows of apps that are not
-    /// responding are kept as they were.
+    /// focus, bringing in its workspace. Windows of apps the backend skipped,
+    /// busy or unchanged, are kept as they were.
     pub fn sync(&mut self) -> Result<()> {
         if self.monitors.is_empty() {
             return Ok(());
@@ -388,10 +394,10 @@ impl Engine {
             self.backend.windows()?.into_iter().filter(WindowInfo::is_tileable).map(|w| (w.id, w)).collect();
         // Windows whose frame was just read, as opposed to kept from before.
         let fresh: HashSet<WindowId> = current.keys().copied().collect();
-        let busy = self.backend.unresponsive_apps();
-        if !busy.is_empty() {
+        let skipped = self.backend.skipped_apps();
+        if !skipped.is_empty() {
             for (&id, info) in &self.info {
-                if busy.contains(&info.pid) {
+                if skipped.contains(&info.pid) {
                     current.entry(id).or_insert_with(|| info.clone());
                 }
             }
@@ -455,6 +461,7 @@ impl Engine {
     /// refuse it, and syncs.
     pub fn retile(&mut self) -> Result<()> {
         self.applier.clear();
+        self.backend.invalidate();
         self.sync()
     }
 
@@ -816,8 +823,8 @@ mod tests {
         fn set_size(&self, id: WindowId, width: f64, height: f64) -> Result<()> {
             self.0.set_size(id, width, height)
         }
-        fn unresponsive_apps(&self) -> Vec<i32> {
-            self.0.unresponsive_apps()
+        fn skipped_apps(&self) -> Vec<i32> {
+            self.0.skipped_apps()
         }
         fn focused_window(&self) -> Option<WindowId> {
             self.0.focused_window()
