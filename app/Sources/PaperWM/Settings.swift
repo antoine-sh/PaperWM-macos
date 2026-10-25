@@ -1,5 +1,12 @@
 import Foundation
 
+enum MinimapStyle: String, Codable {
+    /// The strip with each window as a box, in the middle of the screen.
+    case strip
+    /// A row of app icons at the bottom of the screen.
+    case toolbar
+}
+
 /// The user's preferences, stored as JSON in `UserDefaults`.
 @MainActor
 final class Settings: ObservableObject {
@@ -10,6 +17,7 @@ final class Settings: ObservableObject {
         var workspaceNames: [String] = (1...9).map { String($0) }
         /// Shortcut overrides by `HotKey.id`; missing ids use the default.
         var shortcuts: [String: KeyCombo] = [:]
+        var minimapStyle: MinimapStyle = .toolbar
 
         init() {}
 
@@ -21,6 +29,7 @@ final class Settings: ObservableObject {
             widthPresets = try c.decodeIfPresent([Double].self, forKey: .widthPresets) ?? defaults.widthPresets
             workspaceNames = try c.decodeIfPresent([String].self, forKey: .workspaceNames) ?? defaults.workspaceNames
             shortcuts = try c.decodeIfPresent([String: KeyCombo].self, forKey: .shortcuts) ?? defaults.shortcuts
+            minimapStyle = try c.decodeIfPresent(MinimapStyle.self, forKey: .minimapStyle) ?? defaults.minimapStyle
             workspaceNames += defaults.workspaceNames.dropFirst(workspaceNames.count)
         }
     }
