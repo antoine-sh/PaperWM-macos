@@ -7,6 +7,8 @@ enum Action: Equatable {
     case engine(PwmCommand, Double = 0)
     /// Opens the window switcher, or steps it forward or back.
     case switcher(forward: Bool)
+    /// Flips an on/off setting.
+    case toggle(WritableKeyPath<Settings.Values, Bool>)
 }
 
 /// A key and Carbon modifier mask (`controlKey | optionKey`, …).
@@ -115,6 +117,8 @@ struct HotKey {
                 .engine(PWM_COMMAND_TOGGLE_SCRATCH)),
             key("move-to-scratch", "Move Window to or from Scratch Layer", kVK_Escape, shift,
                 .engine(PWM_COMMAND_MOVE_TO_SCRATCH)),
+            key("toggle-border", "Show or Hide Focus Border", kVK_ANSI_B, base, .toggle(\.focusBorder)),
+            key("toggle-dim", "Dim Background Windows", kVK_ANSI_D, base, .toggle(\.dimBackground)),
         ]
         for n in 1...9 {
             keys.append(key("switch-workspace-\(n)", "Switch to Workspace \(n)", digitKeys[n], base,

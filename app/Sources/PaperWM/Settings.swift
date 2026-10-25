@@ -10,6 +10,15 @@ final class Settings: ObservableObject {
         var workspaceNames: [String] = (1...9).map { String($0) }
         /// Shortcut overrides by `HotKey.id`; missing ids use the default.
         var shortcuts: [String: KeyCombo] = [:]
+        /// Draw a colored border around the focused window.
+        var focusBorder = false
+        /// "#RRGGBB".
+        var borderColor = "#3D8BFF"
+        var borderWidth: Double = 4
+        /// Dim every window except the focused one.
+        var dimBackground = false
+        /// Opacity of the dim, 0–1.
+        var dimAmount = 0.3
 
         init() {}
 
@@ -21,6 +30,11 @@ final class Settings: ObservableObject {
             widthPresets = try c.decodeIfPresent([Double].self, forKey: .widthPresets) ?? defaults.widthPresets
             workspaceNames = try c.decodeIfPresent([String].self, forKey: .workspaceNames) ?? defaults.workspaceNames
             shortcuts = try c.decodeIfPresent([String: KeyCombo].self, forKey: .shortcuts) ?? defaults.shortcuts
+            focusBorder = try c.decodeIfPresent(Bool.self, forKey: .focusBorder) ?? defaults.focusBorder
+            borderColor = try c.decodeIfPresent(String.self, forKey: .borderColor) ?? defaults.borderColor
+            borderWidth = try c.decodeIfPresent(Double.self, forKey: .borderWidth) ?? defaults.borderWidth
+            dimBackground = try c.decodeIfPresent(Bool.self, forKey: .dimBackground) ?? defaults.dimBackground
+            dimAmount = try c.decodeIfPresent(Double.self, forKey: .dimAmount) ?? defaults.dimAmount
             workspaceNames += defaults.workspaceNames.dropFirst(workspaceNames.count)
         }
     }

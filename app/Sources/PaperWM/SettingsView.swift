@@ -14,6 +14,7 @@ struct SettingsView: View {
     var body: some View {
         TabView {
             layout.tabItem { Text("Layout") }
+            appearance.tabItem { Text("Appearance") }
             shortcuts.tabItem { Text("Shortcuts") }
         }
         .padding()
@@ -35,6 +36,30 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    private var appearance: some View {
+        Form {
+            Section("Focused window") {
+                Toggle("Draw a border around the focused window", isOn: $settings.values.focusBorder)
+                ColorPicker("Border color", selection: borderColor, supportsOpacity: false)
+                Stepper("Border width: \(Int(settings.values.borderWidth)) pt", value: $settings.values.borderWidth,
+                        in: 1...16)
+            }
+            Section("Background windows") {
+                Toggle("Dim windows behind the focused one", isOn: $settings.values.dimBackground)
+                Slider(value: $settings.values.dimAmount, in: 0.05...0.8) {
+                    Text("Dim: \(Int((settings.values.dimAmount * 100).rounded()))%")
+                }
+            }
+        }
+    }
+
+    private var borderColor: Binding<Color> {
+        Binding(
+            get: { Color(nsColor: NSColor(hex: settings.values.borderColor) ?? .controlAccentColor) },
+            set: { settings.values.borderColor = NSColor($0).hex }
+        )
     }
 
     private var shortcuts: some View {
