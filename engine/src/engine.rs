@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::animator::Animator;
 use crate::applier::FrameApplier;
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
-use crate::geometry::Rect;
+use crate::geometry::{Point, Rect};
 use crate::placement;
 use crate::workspace::Workspace;
 
@@ -387,6 +387,18 @@ impl Engine {
     /// focus, bringing in its workspace. Windows of apps the backend skipped,
     /// busy or unchanged, are kept as they were.
     pub fn sync(&mut self) -> Result<()> {
+        self.sync_dropping(None)
+    }
+
+    /// Syncs after the user let go of the mouse at `x`, `y` at the end of a
+    /// drag. A tiled window dragged there by its title bar moves into the
+    /// place of the column under the pointer, on whichever monitor that is;
+    /// the strip rearranges around it.
+    pub fn drop_at(&mut self, x: f64, y: f64) -> Result<()> {
+        self.sync_dropping(Some(Point { x, y }))
+    }
+
+    fn sync_dropping(&mut self, drop: Option<Point>) -> Result<()> {
         if self.monitors.is_empty() {
             return Ok(());
         }
@@ -429,6 +441,10 @@ impl Engine {
             let monitor = self.monitor_at(frame).unwrap_or(self.active);
             let viewport = self.viewport(monitor);
             self.workspaces[self.monitors[monitor].workspace].insert_window(id, frame.width, viewport);
+        }
+
+        if let Some(point) = drop {
+            self.drop_window(point, &fresh);
         }
 
         // Tiled windows on screen that the user or their app moved.
@@ -734,15 +750,45 @@ impl Engine {
         true
     }
 
+    /// Moves the tiled window that was dragged to `point`, if any, into the
+    /// place of the column under it. Returns whether one was.
+    fn drop_window(&mut self, point: Point, fresh: &HashSet<WindowId>) -> bool {
+        let Some(monitor) = self.monitors.iter().position(|m| contains(m.area, point)) else { return false };
+        // The dragged window moved without resizing and is still under the
+        // pointer, which holds its title bar.
+        let dragged = self
+            .monitors
+            .iter()
+            .flat_map(|m| self.workspaces[m.workspace].windows())
+            .filter(|id| fresh.contains(id))
+            .find(|id| contains(self.info[id].frame, point) && self.applier.moved(*id, self.info[id].frame));
+        let Some(id) = dragged else { return false };
+        let Some(source) = self.workspaces.iter().position(|w| w.contains(id)) else { return false };
+        let target = self.monitors[monitor].workspace;
+        let gap = self.config.gap;
+        let strip_x = point.x - self.monitors[monitor].area.x - gap + self.animator.shown(target);
+        let column = self.workspaces[target].column_at(strip_x, gap).unwrap_or(0);
+        let moved = if source == target {
+            self.workspaces[target].move_window_to(id, column)
+        } else {
+            self.workspaces[source].remove_window(id);
+            let viewport = self.viewport(monitor);
+            self.workspaces[target].insert_window_at(id, column, self.info[&id].frame.width, viewport);
+            self.active = monitor;
+            true
+        };
+        // Wherever it lands, it goes there rather than back.
+        self.applier.forget(id);
+        moved
+    }
+
     fn viewport(&self, monitor: usize) -> f64 {
         self.monitors.get(monitor).map_or(0.0, |m| (m.area.width - 2.0 * self.config.gap).max(1.0))
     }
 
     fn monitor_at(&self, frame: Rect) -> Option<usize> {
-        let (cx, cy) = (frame.x + frame.width / 2.0, frame.y + frame.height / 2.0);
-        self.monitors
-            .iter()
-            .position(|m| cx >= m.area.x && cx < m.area.max_x() && cy >= m.area.y && cy < m.area.max_y())
+        let centre = Point { x: frame.x + frame.width / 2.0, y: frame.y + frame.height / 2.0 };
+        self.monitors.iter().position(|m| contains(m.area, centre))
     }
 
     fn ensure_visible_all(&mut self) {
@@ -796,6 +842,10 @@ impl Engine {
         }
         self.applier.write(self.backend.as_ref(), frames)
     }
+}
+
+fn contains(rect: Rect, point: Point) -> bool {
+    point.x >= rect.x && point.x < rect.max_x() && point.y >= rect.y && point.y < rect.max_y()
 }
 
 #[cfg(test)]
@@ -1416,6 +1466,67 @@ mod tests {
         backend.update(2, |w| w.frame = Rect::new(600.0, 200.0, 350.0, 250.0));
         engine.sync().unwrap();
         assert_eq!(backend.frame_of(2), Some(placed));
+    }
+
+    /// Drags window `id` by `dx` without resizing it.
+    fn drag(backend: &MockBackend, id: WindowId, dx: f64) {
+        backend.update(id, |w| w.frame.x += dx);
+    }
+
+    #[test]
+    fn window_dropped_on_another_column_takes_its_place() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0), window(3, 800.0, 300.0)]);
+        engine.sync().unwrap();
+        let third = backend.frame_of(3).unwrap();
+        drag(&backend, 1, 600.0);
+        backend.set_focused(Some(1));
+        engine.drop_at(700.0, 50.0).unwrap();
+        assert_eq!(columns(&engine), vec![vec![2], vec![3], vec![1]]);
+        assert_eq!(backend.frame_of(1), Some(third));
+        assert_eq!(backend.frame_of(2).unwrap().x, 8.0);
+    }
+
+    #[test]
+    fn window_dropped_on_its_own_column_goes_back() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        let placed = backend.frame_of(1).unwrap();
+        drag(&backend, 1, 100.0);
+        engine.drop_at(200.0, 50.0).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+        assert_eq!(backend.frame_of(1), Some(placed));
+    }
+
+    #[test]
+    fn resizing_or_clicking_rearranges_nothing() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        // Dragging the left edge moves and resizes.
+        backend.update(1, |w| {
+            w.frame.x += 400.0;
+            w.frame.width -= 100.0;
+        });
+        engine.drop_at(450.0, 50.0).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+        engine.drop_at(450.0, 50.0).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn window_dropped_on_another_monitor_joins_its_strip() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 1200.0, 300.0)]);
+        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.sync().unwrap();
+        drag(&backend, 1, 1050.0);
+        backend.set_focused(Some(1));
+        engine.drop_at(1100.0, 100.0).unwrap();
+        assert!(columns(&engine).is_empty());
+        let right: Vec<Vec<WindowId>> =
+            engine.workspace(1).unwrap().columns().iter().map(|c| c.windows().to_vec()).collect();
+        assert_eq!(right, vec![vec![1], vec![2]]);
+        assert_eq!(engine.state().active_monitor, 1);
+        assert_eq!(backend.frame_of(1).unwrap().x, 1024.0);
     }
 
     #[test]

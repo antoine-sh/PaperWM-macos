@@ -50,6 +50,14 @@ impl FrameApplier {
         self.applied.remove(&id);
     }
 
+    /// Whether `id` was moved since it was placed without being resized, as
+    /// when dragged by its title bar.
+    pub fn moved(&self, id: WindowId, actual: Rect) -> bool {
+        self.get(id).is_some_and(|applied| {
+            !within(applied, actual, DRIFT) && within(applied, Rect { x: applied.x, y: applied.y, ..actual }, DRIFT)
+        })
+    }
+
     /// Moves each window to its frame, with as few Accessibility calls as
     /// possible. Windows that fail are retried on the next write.
     pub fn write(&mut self, backend: &dyn WindowBackend, frames: Vec<(WindowId, Rect)>) -> Result<()> {
