@@ -17,7 +17,7 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 - **Minimap**: an overview of the strip appears briefly while you navigate. In Settings, pick the strip view or a small toolbar of app icons along the bottom of the screen (one per column, focused one highlighted).
 - **Focus highlight**: optionally draw a colored border around the focused window and dim the windows behind it. Both are off by default; turn them on from the menu, Settings or their shortcuts. With Screen Recording permission the border matches each window's own rounded corners; otherwise it uses the corner radius set in Settings.
 - **Menu bar**: shows the current workspace's name; the menu switches workspaces, toggles the focus border and dimming, and opens Settings.
-- **Settings** (⌘, from the menu): gaps, column width presets, scroll animation length (0 turns it off), workspace names, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
+- **Settings** (⌘, from the menu): gaps, column width presets, scroll animation length (0 turns it off), whether to keep the focused column centred (never, when the columns overflow the screen, or always), workspace names, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
 
 ### Keyboard shortcuts
 
