@@ -205,6 +205,16 @@ pub unsafe extern "C" fn pwm_engine_command(engine: *mut Engine, command: u32, a
     status(engine.command(command))
 }
 
+/// Advances strip slides by `seconds` and moves the windows. Returns
+/// whether a strip is still sliding; call again on the next frame if so.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_tick(engine: *mut Engine, seconds: f64) -> bool {
+    engine.as_mut().is_some_and(|engine| engine.tick(seconds).unwrap_or(false))
+}
+
 /// Applies settings given as JSON (see `engine::Config`). Malformed JSON
 /// leaves the current settings in place.
 ///

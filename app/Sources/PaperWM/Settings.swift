@@ -15,6 +15,8 @@ final class Settings: ObservableObject {
         /// Fractions of the screen width that Cycle Column Width steps through.
         var widthPresets: [Double] = [1.0 / 3.0, 0.5, 2.0 / 3.0]
         var workspaceNames: [String] = (1...9).map { String($0) }
+        /// Seconds the strip takes to scroll; 0 jumps.
+        var animationDuration: Double = 0.25
         /// Shortcut overrides by `HotKey.id`; missing ids use the default.
         var shortcuts: [String: KeyCombo] = [:]
         /// Draw a colored border around the focused window.
@@ -37,6 +39,8 @@ final class Settings: ObservableObject {
             gap = try c.decodeIfPresent(Double.self, forKey: .gap) ?? defaults.gap
             widthPresets = try c.decodeIfPresent([Double].self, forKey: .widthPresets) ?? defaults.widthPresets
             workspaceNames = try c.decodeIfPresent([String].self, forKey: .workspaceNames) ?? defaults.workspaceNames
+            animationDuration = try c.decodeIfPresent(Double.self, forKey: .animationDuration)
+                ?? defaults.animationDuration
             shortcuts = try c.decodeIfPresent([String: KeyCombo].self, forKey: .shortcuts) ?? defaults.shortcuts
             focusBorder = try c.decodeIfPresent(Bool.self, forKey: .focusBorder) ?? defaults.focusBorder
             borderColor = try c.decodeIfPresent(String.self, forKey: .borderColor) ?? defaults.borderColor
@@ -81,10 +85,12 @@ final class Settings: ObservableObject {
             let gap: Double
             let widthPresets: [Double]
             let workspaceNames: [String]
+            let animationDuration: Double
         }
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
-        let config = Config(gap: values.gap, widthPresets: values.widthPresets, workspaceNames: values.workspaceNames)
+        let config = Config(gap: values.gap, widthPresets: values.widthPresets, workspaceNames: values.workspaceNames,
+                            animationDuration: values.animationDuration)
         return (try? encoder.encode(config)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
     }
 

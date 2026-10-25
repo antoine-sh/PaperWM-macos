@@ -105,7 +105,12 @@ PwmStatus pwm_engine_sync(PwmEngine *engine);
 // `command` is a PwmCommand value; `arg` is ignored by commands without one.
 PwmStatus pwm_engine_command(PwmEngine *engine, uint32_t command, double arg);
 
-// Settings as JSON: {"gap": 8, "width_presets": [0.33, 0.5], "workspace_names": ["1", ...]}.
+// Advances strip slides by `seconds` and moves the windows. Returns whether a
+// strip is still sliding; call again on the next frame if so.
+bool pwm_engine_tick(PwmEngine *engine, double seconds);
+
+// Settings as JSON: {"gap": 8, "width_presets": [0.33, 0.5], "workspace_names": ["1", ...],
+// "animation_duration": 0.25}.
 // Missing fields keep their defaults; malformed JSON returns INVALID_ARGUMENT.
 PwmStatus pwm_engine_set_config(PwmEngine *engine, const char *json);
 

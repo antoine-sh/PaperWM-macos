@@ -92,6 +92,11 @@ impl WindowBackend for MockBackend {
         Ok(())
     }
 
+    fn set_position(&self, id: WindowId, x: f64, y: f64) -> Result<()> {
+        let size = self.frame_of(id).ok_or(BackendError::WindowNotFound(id))?;
+        self.set_frame(id, Rect { x, y, ..size })
+    }
+
     fn focused_window(&self) -> Option<WindowId> {
         self.focused.get()
     }
