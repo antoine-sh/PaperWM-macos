@@ -15,7 +15,7 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 - **Window switcher**: ⌃⌥Tab through recently used windows across all workspaces, with live previews if you grant Screen Recording permission (app icons otherwise).
 - **Trackpad**: hold ⌃⌥ and scroll with two fingers sideways to pan the strip (focus lands on the column in the middle when you let go), or up/down to switch workspace. macOS reserves three-finger swipes, so this stands in for PaperWM's.
 - **Minimap**: an overview of the strip appears briefly while you navigate. In Settings, pick the strip view or a small toolbar of app icons along the bottom of the screen (one per column, focused one highlighted).
-- **Focus highlight**: optionally draw a colored border around the focused window and dim the windows behind it. Both are off by default; turn them on from the menu, Settings or their shortcuts.
+- **Focus highlight**: optionally draw a colored border around the focused window and dim the windows behind it. Both are off by default; turn them on from the menu, Settings or their shortcuts. With Screen Recording permission the border matches each window's own rounded corners; otherwise it uses the corner radius set in Settings.
 - **Menu bar**: shows the current workspace's name; the menu switches workspaces, toggles the focus border and dimming, and opens Settings.
 - **Settings** (⌘, from the menu): gaps, column width presets, scroll animation length (0 turns it off), workspace names, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
 
@@ -51,7 +51,7 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 ### Permissions
 
 - **Accessibility** (required): to move, resize and focus windows, and to read the trackpad while ⌃⌥ is held.
-- **Screen Recording** (optional): only for window previews in the switcher. macOS asks the first time you open the switcher.
+- **Screen Recording** (optional): for window previews in the switcher, and to match the focus border to each window's rounded corners. macOS asks the first time you open the switcher.
 
 ## Building
 
