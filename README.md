@@ -9,6 +9,7 @@ The window-management engine is written in Rust and the user interface in Swift,
 Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tested by hand on a real Mac.
 
 - **Scrolling strip**: every window opens as a new column to the right of the focused one, focusing a column slides the strip to bring it into view, and columns can be rearranged, resized and stacked from the keyboard. Dialogs, sheets and other non-standard windows float. Columns that scroll off screen are parked at the screen edge, since macOS doesn't allow hiding windows entirely off screen.
+- **Drag to reorder**: drag a window by its title bar onto another column and let go: it takes that column's place and the strip rearranges around it. A window dragged out of a stack gets a column of its own, and dropping onto another monitor moves it into that monitor's strip.
 - **Workspaces**: nine PaperWM workspaces, independent of macOS Spaces (keep everything on one Space). Each monitor shows one; the others' windows are tucked into a screen corner. Focusing a window that lives on a hidden workspace (⌘Tab, Dock, a click on a notification) brings its workspace in.
 - **Monitors**: focus or move windows to the monitor on the left or right.
 - **Scratch layer**: floating windows above the workspaces that you can show or hide together.
@@ -80,7 +81,7 @@ cargo test
 | Path | Contents |
 | --- | --- |
 | `engine/` | Rust engine: scrolling layout (`workspace.rs`, `placement.rs`), workspaces, monitors, scratch layer, window sync and commands (`engine.rs`), macOS Accessibility backend (`macos/`), C interface (`ffi.rs`, `include/paperwm_engine.h`) |
-| `app/` | Swift menu bar app (SwiftPM package): hot keys, settings, minimap, switcher, trackpad gestures, app and monitor tracking; links the engine as a static library |
+| `app/` | Swift menu bar app (SwiftPM package): hot keys, settings, minimap, switcher, trackpad gestures, window drops, app and monitor tracking; links the engine as a static library |
 | `scripts/build-app.sh` | Builds both and assembles `build/PaperWM.app` |
 | `scripts/make-dmg.sh` | Packages the app as a `.dmg` |
 

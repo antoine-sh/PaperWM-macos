@@ -95,6 +95,12 @@ final class Engine {
         if let error = EngineError(pwm_engine_sync(handle)) { throw error }
     }
 
+    /// Syncs after a drag ended at `point` (Accessibility coordinates),
+    /// moving a window dragged there by its title bar into the column under it.
+    func drop(at point: CGPoint) throws {
+        if let error = EngineError(pwm_engine_drop(handle, point.x, point.y)) { throw error }
+    }
+
     /// Puts every window back in its place and syncs.
     func retile() throws {
         if let error = EngineError(pwm_engine_retile(handle)) { throw error }

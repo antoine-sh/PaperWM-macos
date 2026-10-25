@@ -17,8 +17,9 @@ final class WindowManager {
     private let decorations = Decorations()
     private lazy var gestures = Gestures { [weak self] action in self?.perform(action) }
     private lazy var modifiers = ModifierWatcher { [weak self] in self?.superReleased() }
+    private lazy var drags = DragWatcher { [weak self] point in self?.dropped(at: point) }
     private var syncScheduled = false
-    /// A sync asked for during a slide, run when the slide ends.
+    /// A sync asked for during a slide or a drag, run when it ends.
     private var syncDeferred = false
     private var hotKeysPaused = false
     /// What was last applied, so settings edits only redo what changed.
@@ -57,6 +58,7 @@ final class WindowManager {
         applySettings()
         updateMonitors()
         modifiers.start()
+        drags.start()
         gestures.start()
     }
 
@@ -150,7 +152,7 @@ final class WindowManager {
         decorations.track()
         guard !sliding else { return }
         frames.stop()
-        if syncDeferred {
+        if syncDeferred && !drags.isDragging {
             syncDeferred = false
             syncNow()
         }
@@ -165,8 +167,9 @@ final class WindowManager {
             MainActor.assumeIsolated {
                 guard let self else { return }
                 self.syncScheduled = false
-                // Reading windows mid-slide only finds them in motion.
-                if self.frames.isRunning {
+                // Reading windows mid-slide or mid-drag only finds them in
+                // motion, and would put a dragged window back under the pointer.
+                if self.frames.isRunning || self.drags.isDragging {
                     self.syncDeferred = true
                 } else {
                     self.syncNow()
@@ -177,6 +180,14 @@ final class WindowManager {
 
     func syncNow() {
         report { try engine.sync() }
+        publish()
+    }
+
+    /// Moves a window dragged onto another column there; the drop syncs in
+    /// place of any sync held back during the drag.
+    private func dropped(at point: CGPoint) {
+        syncDeferred = false
+        report { try engine.drop(at: point) }
         publish()
     }
 
