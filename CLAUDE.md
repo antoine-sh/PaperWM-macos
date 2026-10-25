@@ -5,6 +5,12 @@ A port of PaperWM (scrollable tiling window manager) to macOS: a Rust engine
 shipped as one `.app`. Accessibility permission only; SIP stays on. See
 `README.md` for features, shortcuts and the roadmap.
 
+# Working style
+
+- On every task, invoke the `ponytail` skill and follow the superpowers
+  skills that apply (brainstorming, test-driven-development,
+  systematic-debugging, verification-before-completion, ...).
+
 # Commands
 
 ```sh
