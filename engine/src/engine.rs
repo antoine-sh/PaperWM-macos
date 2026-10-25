@@ -185,14 +185,24 @@ pub struct WindowState {
 struct Monitor {
     /// Usable area (without menu bar and Dock), in Accessibility coordinates.
     area: Rect,
-    workspace: Workspace,
+    /// Index of the workspace shown on this monitor.
+    workspace: usize,
 }
 
 pub struct Engine {
     backend: Box<dyn WindowBackend>,
     config: Config,
+    /// Always `WORKSPACE_COUNT` long. Each is shown on at most one monitor.
+    workspaces: Vec<Workspace>,
     monitors: Vec<Monitor>,
+    /// Index of the monitor keyboard commands act on.
     active: usize,
+    /// The workspace shown before the latest switch, for `LastWorkspace`.
+    last_workspace: Option<usize>,
+    /// System focus seen just before the engine last moved focus. macOS
+    /// applies focus changes asynchronously, so until the reported focus
+    /// differs from this, it is old news and must not be followed.
+    stale_focus: Option<WindowId>,
     /// Last frame set on each window, to skip redundant Accessibility calls.
     applied: HashMap<WindowId, Rect>,
     /// What the last sync saw of each managed window, for the UI.
@@ -204,8 +214,11 @@ impl Engine {
         Self {
             backend,
             config: Config::default(),
+            workspaces: vec![Workspace::default(); WORKSPACE_COUNT],
             monitors: Vec::new(),
             active: 0,
+            last_workspace: None,
+            stale_focus: None,
             applied: HashMap::new(),
             info: HashMap::new(),
         }
@@ -236,17 +249,20 @@ impl Engine {
         self.apply()
     }
 
+    pub fn workspace(&self, index: usize) -> Option<&Workspace> {
+        self.workspaces.get(index)
+    }
+
     pub fn state(&self) -> State {
         let workspaces = self
-            .monitors
+            .workspaces
             .iter()
             .enumerate()
-            .map(|(i, m)| WorkspaceState {
+            .map(|(i, ws)| WorkspaceState {
                 name: self.config.workspace_names.get(i).cloned().unwrap_or_default(),
-                scroll: m.workspace.scroll(),
-                focused_column: m.workspace.focused_column(),
-                columns: m
-                    .workspace
+                scroll: ws.scroll(),
+                focused_column: ws.focused_column(),
+                columns: ws
                     .columns()
                     .iter()
                     .map(|c| ColumnState {
@@ -258,21 +274,16 @@ impl Engine {
             })
             .collect();
         let windows = self
-            .monitors
+            .workspaces
             .iter()
-            .flat_map(|m| m.workspace.windows())
+            .flat_map(Workspace::windows)
             .filter_map(|id| self.info.get(&id))
             .map(|w| WindowState { id: w.id, pid: w.pid, app_name: w.app_name.clone(), title: w.title.clone() })
             .collect();
         State {
             active_monitor: self.active,
             gap: self.config.gap,
-            monitors: self
-                .monitors
-                .iter()
-                .enumerate()
-                .map(|(i, m)| MonitorState { area: m.area, workspace: i })
-                .collect(),
+            monitors: self.monitors.iter().map(|m| MonitorState { area: m.area, workspace: m.workspace }).collect(),
             workspaces,
             windows,
             mru: Vec::new(),
@@ -281,26 +292,24 @@ impl Engine {
         }
     }
 
-    pub fn workspace(&self, monitor: usize) -> Option<&Workspace> {
-        self.monitors.get(monitor).map(|m| &m.workspace)
-    }
-
-    /// Sets the usable area of each monitor, the main one first. Workspaces
-    /// stay with their monitor index; windows of removed monitors move to
-    /// the first one.
+    /// Sets the usable area of each monitor, the main one first. Monitors
+    /// keep the workspace they showed by index; new ones get the first
+    /// workspace not shown anywhere. Workspaces of removed monitors are
+    /// hidden with their windows.
     pub fn set_monitors(&mut self, areas: &[Rect]) -> Result<()> {
         if areas.is_empty() {
             return Ok(());
         }
-        let mut old = std::mem::take(&mut self.monitors).into_iter();
-        self.monitors = areas
-            .iter()
-            .map(|&area| Monitor { area, workspace: old.next().map(|m| m.workspace).unwrap_or_default() })
-            .collect();
-        let viewport = self.viewport(0);
-        for orphan in old.flat_map(|m| m.workspace.windows().collect::<Vec<_>>()) {
-            self.monitors[0].workspace.insert_window(orphan, viewport / 2.0, viewport);
+        let mut monitors: Vec<Monitor> = Vec::with_capacity(areas.len());
+        for (i, &area) in areas.iter().enumerate() {
+            let kept = self.monitors.get(i).map(|m| m.workspace);
+            let workspace = kept
+                .filter(|w| monitors.iter().all(|m| m.workspace != *w))
+                .or_else(|| (0..WORKSPACE_COUNT).find(|w| monitors.iter().all(|m| m.workspace != *w)))
+                .unwrap_or(0);
+            monitors.push(Monitor { area, workspace });
         }
+        self.monitors = monitors;
         self.active = self.active.min(self.monitors.len() - 1);
         self.applied.clear();
         self.ensure_visible_all();
@@ -309,7 +318,7 @@ impl Engine {
 
     /// Reconciles the layout with the windows that exist now: adds new ones
     /// next to the focused column, drops closed or minimized ones, and
-    /// follows the system's keyboard focus.
+    /// follows the system's keyboard focus, bringing in its workspace.
     pub fn sync(&mut self) -> Result<()> {
         if self.monitors.is_empty() {
             return Ok(());
@@ -320,27 +329,30 @@ impl Engine {
         self.info = tileable.iter().map(|(&id, &w)| (id, w.clone())).collect();
 
         let mut managed = HashSet::new();
-        for monitor in &mut self.monitors {
-            let gone: Vec<WindowId> = monitor.workspace.windows().filter(|id| !tileable.contains_key(id)).collect();
+        for workspace in &mut self.workspaces {
+            let gone: Vec<WindowId> = workspace.windows().filter(|id| !tileable.contains_key(id)).collect();
             for id in gone {
-                monitor.workspace.remove_window(id);
+                workspace.remove_window(id);
                 self.applied.remove(&id);
             }
-            managed.extend(monitor.workspace.windows());
+            managed.extend(workspace.windows());
         }
 
         let mut new: Vec<&WindowInfo> = tileable.values().copied().filter(|w| !managed.contains(&w.id)).collect();
         new.sort_by(|a, b| a.frame.x.total_cmp(&b.frame.x).then(a.id.cmp(&b.id)));
         for window in new {
-            let index = self.monitor_at(window.frame).unwrap_or(self.active);
-            let viewport = self.viewport(index);
-            self.monitors[index].workspace.insert_window(window.id, window.frame.width, viewport);
+            let monitor = self.monitor_at(window.frame).unwrap_or(self.active);
+            let viewport = self.viewport(monitor);
+            self.workspaces[self.monitors[monitor].workspace].insert_window(window.id, window.frame.width, viewport);
         }
 
-        if let Some(focused) = self.backend.focused_window() {
-            if let Some(index) = self.monitors.iter().position(|m| m.workspace.contains(focused)) {
-                self.monitors[index].workspace.focus_window(focused);
-                self.active = index;
+        let focused = self.backend.focused_window();
+        if focused.is_some() && focused == self.stale_focus {
+            // Our own focus request has not landed yet.
+        } else {
+            self.stale_focus = None;
+            if let Some(id) = focused {
+                self.follow_focus(id);
             }
         }
 
@@ -351,11 +363,14 @@ impl Engine {
     /// Runs a keyboard command on the active monitor. Returns whether it
     /// changed anything.
     pub fn command(&mut self, command: Command) -> Result<bool> {
+        if self.monitors.is_empty() {
+            return Ok(false);
+        }
         let gap = self.config.gap;
         let viewport = self.viewport(self.active);
-        let Some(monitor) = self.monitors.get_mut(self.active) else { return Ok(false) };
-        let ws = &mut monitor.workspace;
-        let before = ws.focused_window();
+        let current = self.monitors[self.active].workspace;
+        let before = self.focused_window();
+        let ws = &mut self.workspaces[current];
         let changed = match command {
             Command::FocusLeft => ws.focus_column(-1),
             Command::FocusRight => ws.focus_column(1),
@@ -373,19 +388,25 @@ impl Engine {
                 ws.center_focused(viewport, gap);
                 true
             }
+            Command::SwitchWorkspace(target) => self.show_workspace(target),
+            Command::NextWorkspace => self.show_workspace((current + 1) % WORKSPACE_COUNT),
+            Command::PreviousWorkspace => self.show_workspace((current + WORKSPACE_COUNT - 1) % WORKSPACE_COUNT),
+            Command::LastWorkspace => self.last_workspace.is_some_and(|w| self.show_workspace(w)),
+            Command::MoveToWorkspace(target) => self.move_to_workspace(target),
+            Command::MoveToNextWorkspace => self.move_to_workspace((current + 1) % WORKSPACE_COUNT),
+            Command::MoveToPreviousWorkspace => {
+                self.move_to_workspace((current + WORKSPACE_COUNT - 1) % WORKSPACE_COUNT)
+            }
             _ => false,
         };
         if command != Command::Center {
-            ws.ensure_focused_visible(viewport, gap);
+            self.ensure_visible_all();
         }
-        let after = ws.focused_window();
 
         self.apply()?;
+        let after = self.focused_window();
         if let Some(id) = after.filter(|&id| Some(id) != before) {
-            match self.backend.focus(id) {
-                Ok(()) | Err(BackendError::WindowNotFound(_)) => {}
-                Err(err) => return Err(err),
-            }
+            self.focus(id)?;
         }
         Ok(changed)
     }
@@ -402,6 +423,65 @@ impl Engine {
         self.backend.set_change_handler(handler);
     }
 
+    /// The focused window of the active monitor's workspace.
+    fn focused_window(&self) -> Option<WindowId> {
+        self.monitors.get(self.active).and_then(|m| self.workspaces[m.workspace].focused_window())
+    }
+
+    fn focus(&mut self, id: WindowId) -> Result<()> {
+        let previous = self.backend.focused_window();
+        match self.backend.focus(id) {
+            Ok(()) => {
+                self.stale_focus = previous.filter(|&p| p != id);
+                Ok(())
+            }
+            Err(BackendError::WindowNotFound(_)) => Ok(()),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Makes the workspace holding `id` current and focuses `id` in it.
+    fn follow_focus(&mut self, id: WindowId) {
+        let Some(workspace) = self.workspaces.iter().position(|w| w.contains(id)) else { return };
+        match self.monitors.iter().position(|m| m.workspace == workspace) {
+            Some(monitor) => self.active = monitor,
+            None => {
+                self.show_workspace(workspace);
+            }
+        }
+        self.workspaces[workspace].focus_window(id);
+    }
+
+    /// Shows workspace `target` on the active monitor, swapping with the
+    /// monitor that showed it, if any.
+    fn show_workspace(&mut self, target: usize) -> bool {
+        let current = self.monitors[self.active].workspace;
+        if target >= WORKSPACE_COUNT || target == current {
+            return false;
+        }
+        if let Some(other) = self.monitors.iter_mut().find(|m| m.workspace == target) {
+            other.workspace = current;
+        }
+        self.monitors[self.active].workspace = target;
+        self.last_workspace = Some(current);
+        true
+    }
+
+    /// Moves the focused window next to workspace `target`'s focused column.
+    fn move_to_workspace(&mut self, target: usize) -> bool {
+        let current = self.monitors[self.active].workspace;
+        let Some(id) = self.focused_window() else { return false };
+        if target >= WORKSPACE_COUNT || target == current {
+            return false;
+        }
+        let width = self.workspaces[current].columns()[self.workspaces[current].focused_column()].width();
+        self.workspaces[current].remove_window(id);
+        let monitor = self.monitors.iter().position(|m| m.workspace == target).unwrap_or(self.active);
+        let viewport = self.viewport(monitor);
+        self.workspaces[target].insert_window(id, width, viewport);
+        true
+    }
+
     fn viewport(&self, monitor: usize) -> f64 {
         self.monitors.get(monitor).map_or(0.0, |m| (m.area.width - 2.0 * self.config.gap).max(1.0))
     }
@@ -416,28 +496,41 @@ impl Engine {
     fn ensure_visible_all(&mut self) {
         for i in 0..self.monitors.len() {
             let viewport = self.viewport(i);
-            self.monitors[i].workspace.ensure_focused_visible(viewport, self.config.gap);
+            self.workspaces[self.monitors[i].workspace].ensure_focused_visible(viewport, self.config.gap);
         }
     }
 
-    /// Moves every managed window to its place in the layout.
+    /// Moves every managed window to its place: shown workspaces in their
+    /// strips, everything else into the hiding corner.
     fn apply(&mut self) -> Result<()> {
         let areas: Vec<Rect> = self.monitors.iter().map(|m| m.area).collect();
+        let mut frames = Vec::new();
         for (i, monitor) in self.monitors.iter().enumerate() {
             let others: Vec<Rect> = areas.iter().enumerate().filter(|&(j, _)| j != i).map(|(_, &a)| a).collect();
-            for (id, frame) in placement::frames(&monitor.workspace, monitor.area, self.config.gap, &others) {
-                if self.applied.get(&id).is_some_and(|f| approx_eq(*f, frame)) {
-                    continue;
+            let workspace = &self.workspaces[monitor.workspace];
+            frames.extend(placement::frames(workspace, monitor.area, self.config.gap, &others));
+        }
+        for (index, workspace) in self.workspaces.iter().enumerate() {
+            if self.monitors.iter().any(|m| m.workspace == index) {
+                continue;
+            }
+            for id in workspace.windows() {
+                let frame = self.applied.get(&id).or(self.info.get(&id).map(|w| &w.frame)).copied().unwrap_or_default();
+                frames.push((id, placement::hidden_frame(frame, &areas)));
+            }
+        }
+        for (id, frame) in frames {
+            if self.applied.get(&id).is_some_and(|f| approx_eq(*f, frame)) {
+                continue;
+            }
+            match self.backend.set_frame(id, frame) {
+                Ok(()) => {
+                    self.applied.insert(id, frame);
                 }
-                match self.backend.set_frame(id, frame) {
-                    Ok(()) => {
-                        self.applied.insert(id, frame);
-                    }
-                    Err(BackendError::NotTrusted) => return Err(BackendError::NotTrusted),
-                    // Closed windows are dropped on the next sync; windows
-                    // that refuse a size keep their own.
-                    Err(_) => {}
-                }
+                Err(BackendError::NotTrusted) => return Err(BackendError::NotTrusted),
+                // Closed windows are dropped on the next sync; windows
+                // that refuse a size keep their own.
+                Err(_) => {}
             }
         }
         Ok(())
@@ -584,16 +677,164 @@ mod tests {
         assert_eq!(backend.set_frame_calls(), calls);
     }
 
+    const RIGHT: Rect = Rect::new(1016.0, 0.0, 800.0, 600.0);
+
+    fn shown(engine: &Engine) -> Vec<usize> {
+        engine.state().monitors.iter().map(|m| m.workspace).collect()
+    }
+
+    fn is_hidden(frame: Rect) -> bool {
+        frame.x == SCREEN.max_x() - placement::PEEK && frame.y == SCREEN.max_y() - placement::PEEK
+    }
+
     #[test]
     fn windows_go_to_the_monitor_they_are_on() {
         let (mut engine, _) = engine_with(vec![window(1, 0.0, 300.0), window(2, 1200.0, 300.0)]);
-        engine.set_monitors(&[SCREEN, Rect::new(1016.0, 0.0, 800.0, 600.0)]).unwrap();
+        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
         engine.sync().unwrap();
         assert_eq!(columns(&engine), vec![vec![1]]);
         assert_eq!(engine.workspace(1).unwrap().columns()[0].windows(), &[2]);
+    }
+
+    #[test]
+    fn monitors_show_distinct_workspaces() {
+        let (mut engine, _) = engine_with(vec![]);
+        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        assert_eq!(shown(&engine), vec![0, 1]);
+    }
+
+    #[test]
+    fn unplugged_monitor_hides_its_workspace() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 1200.0, 300.0)]);
+        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.sync().unwrap();
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        assert_eq!(engine.state().active_monitor, 1);
 
         engine.set_monitors(&[SCREEN]).unwrap();
-        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+        assert_eq!(engine.state().active_monitor, 0);
+        assert_eq!(columns(&engine), vec![vec![1]]);
+        assert_eq!(engine.workspace(1).unwrap().columns()[0].windows(), &[2]);
+        assert!(is_hidden(backend.frame_of(2).unwrap()));
+    }
+
+    #[test]
+    fn switch_workspace_hides_old_windows() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.sync().unwrap();
+        assert_eq!(engine.command(Command::SwitchWorkspace(1)), Ok(true));
+        assert_eq!(shown(&engine), vec![1]);
+        assert!(is_hidden(backend.frame_of(1).unwrap()));
+        assert_eq!(backend.frame_of(1).unwrap().width, 300.0);
+
+        assert_eq!(engine.command(Command::SwitchWorkspace(0)), Ok(true));
+        assert_eq!(backend.frame_of(1).unwrap().x, 8.0);
+        assert_eq!(backend.focused_window(), Some(1));
+    }
+
+    #[test]
+    fn switching_to_shown_or_unknown_workspace_is_noop() {
+        let (mut engine, _) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.sync().unwrap();
+        assert_eq!(engine.command(Command::SwitchWorkspace(0)), Ok(false));
+        assert_eq!(engine.command(Command::SwitchWorkspace(WORKSPACE_COUNT)), Ok(false));
+        assert_eq!(shown(&engine), vec![0]);
+    }
+
+    #[test]
+    fn switch_to_workspace_on_other_monitor_swaps() {
+        let (mut engine, _) = engine_with(vec![]);
+        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        assert_eq!(engine.command(Command::SwitchWorkspace(1)), Ok(true));
+        assert_eq!(shown(&engine), vec![1, 0]);
+    }
+
+    #[test]
+    fn move_to_workspace_hides_window_and_focuses_neighbour() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        assert_eq!(engine.command(Command::MoveToWorkspace(3)), Ok(true));
+        assert_eq!(columns(&engine), vec![vec![1]]);
+        assert_eq!(engine.workspace(3).unwrap().focused_window(), Some(2));
+        assert!(is_hidden(backend.frame_of(2).unwrap()));
+        assert_eq!(backend.focused_window(), Some(1));
+
+        assert_eq!(engine.command(Command::MoveToWorkspace(0)), Ok(false));
+        assert_eq!(engine.command(Command::MoveToNextWorkspace), Ok(true));
+        assert_eq!(engine.workspace(1).unwrap().focused_window(), Some(1));
+    }
+
+    #[test]
+    fn empty_workspace_has_no_focus() {
+        let (mut engine, _) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::MoveToWorkspace(1)).unwrap();
+        assert!(engine.workspace(0).unwrap().is_empty());
+        assert_eq!(engine.command(Command::SwitchWorkspace(2)), Ok(true));
+        assert_eq!(engine.command(Command::FocusLeft), Ok(false));
+        assert_eq!(engine.command(Command::MoveToWorkspace(1)), Ok(false));
+        assert_eq!(engine.workspace(2).unwrap().focused_window(), None);
+    }
+
+    #[test]
+    fn focus_on_hidden_workspace_window_brings_it_in() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::MoveToWorkspace(3)).unwrap();
+        // The user ⌘Tabs to window 2.
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        assert_eq!(shown(&engine), vec![3]);
+        assert_eq!(backend.frame_of(2).unwrap().x, 8.0);
+        assert!(is_hidden(backend.frame_of(1).unwrap()));
+    }
+
+    #[test]
+    fn stale_system_focus_after_a_command_is_ignored() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        backend.set_focused(Some(2));
+        backend.set_focus_is_async(true);
+        engine.command(Command::MoveToWorkspace(3)).unwrap();
+        // macOS has not applied the focus change yet when the next sync runs.
+        engine.sync().unwrap();
+        assert_eq!(shown(&engine), vec![0]);
+        // Once focus really changes, it is followed again.
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        assert_eq!(shown(&engine), vec![0]);
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        assert_eq!(shown(&engine), vec![3]);
+    }
+
+    #[test]
+    fn closed_window_on_hidden_workspace_is_forgotten() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::MoveToWorkspace(3)).unwrap();
+        backend.remove(2);
+        engine.sync().unwrap();
+        assert!(engine.workspace(3).unwrap().is_empty());
+        assert!(engine.state().windows.iter().all(|w| w.id != 2));
+    }
+
+    #[test]
+    fn next_previous_and_last_workspace() {
+        let (mut engine, _) = engine_with(vec![]);
+        engine.command(Command::SwitchWorkspace(8)).unwrap();
+        engine.command(Command::NextWorkspace).unwrap();
+        assert_eq!(shown(&engine), vec![0]);
+        engine.command(Command::PreviousWorkspace).unwrap();
+        assert_eq!(shown(&engine), vec![8]);
+        engine.command(Command::SwitchWorkspace(2)).unwrap();
+        assert_eq!(engine.command(Command::LastWorkspace), Ok(true));
+        assert_eq!(shown(&engine), vec![8]);
+        assert_eq!(engine.command(Command::LastWorkspace), Ok(true));
+        assert_eq!(shown(&engine), vec![2]);
     }
 
     #[test]
