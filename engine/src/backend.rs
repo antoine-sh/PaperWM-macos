@@ -58,11 +58,15 @@ pub trait WindowBackend {
     /// All windows of regular apps on the current Space, front to back.
     fn windows(&self) -> Result<Vec<WindowInfo>>;
 
-    /// Apps that did not answer during the last [`windows`](Self::windows)
-    /// call. Their windows are missing from it but still exist.
-    fn unresponsive_apps(&self) -> Vec<i32> {
+    /// Apps the last [`windows`](Self::windows) call did not read, because
+    /// they were busy or nothing about them changed. Their windows are
+    /// missing from it but still exist as they were.
+    fn skipped_apps(&self) -> Vec<i32> {
         Vec::new()
     }
+
+    /// Makes the next [`windows`](Self::windows) call read every app.
+    fn invalidate(&self) {}
 
     fn set_frame(&self, id: WindowId, frame: Rect) -> Result<()>;
 

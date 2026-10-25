@@ -12,7 +12,9 @@ final class Decorations {
     /// One per screen, at normal window level just below the focused window.
     private var dims: [NSPanel] = []
     private var values = Settings.Values()
+    /// Follows the focused window while a mouse button is down.
     private var timer: Timer?
+    private var mouseMonitor: Any?
     /// The window being decorated and the frame it was last shown at.
     private var focused: (id: CGWindowID, frame: CGRect)?
     /// The focused window the engine last reported.
@@ -33,17 +35,18 @@ final class Decorations {
         self.values = values
         borderView.color = NSColor(hex: values.borderColor) ?? .controlAccentColor
         borderView.width = values.borderWidth
-        if isActive, timer == nil {
-            // Window moves aren't observed, so follow the focused window
-            // while anything is shown; each tick looks up that one window.
-            let timer = Timer(timeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.track() }
+        if isActive, mouseMonitor == nil {
+            // Window moves aren't observed. The user moves windows by dragging
+            // them, and slides and pans call `track` themselves, so polling
+            // is only needed while a button is down.
+            mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .leftMouseUp]) {
+                [weak self] event in
+                MainActor.assumeIsolated { self?.followMouse(down: event.type == .leftMouseDown) }
             }
-            RunLoop.main.add(timer, forMode: .common)
-            self.timer = timer
         } else if !isActive {
-            timer?.invalidate()
-            timer = nil
+            if let mouseMonitor { NSEvent.removeMonitor(mouseMonitor) }
+            mouseMonitor = nil
+            followMouse(down: false)
         }
         focused = nil
         refresh(focus: engineFocus)
@@ -59,6 +62,26 @@ final class Decorations {
         }
         let window = focus.flatMap(Self.window) ?? Self.frontWindow()
         show(window, raised: window?.id != focused?.id)
+        // Without the polling timer, catch a window that settles a moment
+        // after it was placed, e.g. one that refused its size.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+            MainActor.assumeIsolated { self?.track() }
+        }
+    }
+
+    private func followMouse(down: Bool) {
+        timer?.invalidate()
+        timer = nil
+        guard down else {
+            track()
+            return
+        }
+        // Each tick looks up that one window.
+        let timer = Timer(timeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.track() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 
     /// Follows the focused window when it moves, e.g. during a slide or a drag.

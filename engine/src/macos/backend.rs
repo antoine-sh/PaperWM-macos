@@ -1,7 +1,7 @@
 //! [`WindowBackend`] implementation for macOS.
 
 use std::cell::RefCell;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::{Duration, Instant};
 
 use accessibility_sys::{
@@ -10,7 +10,7 @@ use accessibility_sys::{
     kAXSizeAttribute, kAXStandardWindowSubrole, kAXSubroleAttribute, kAXTitleAttribute, kAXWindowsAttribute, AXError,
 };
 
-use super::ax::{self, to_backend_error, AxElement};
+use super::ax::{self, as_bool, as_point, as_size, as_string, to_backend_error, AxElement};
 use super::observer::{AppObserver, HandlerSlot};
 use super::window_list;
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
@@ -21,6 +21,10 @@ use crate::geometry::{Point, Rect, Size};
 const TIMED_OUT: Duration = Duration::from_millis((ax::MESSAGING_TIMEOUT * 800.0) as u64);
 /// How long to leave a busy app alone before asking it again.
 const BACK_OFF: Duration = Duration::from_secs(2);
+/// What `windows()` reads of each window, in one round trip. The subrole and
+/// minimized state are not always needed, but asking costs nothing extra.
+const WINDOW_ATTRIBUTES: [&str; 5] =
+    [kAXPositionAttribute, kAXSizeAttribute, kAXTitleAttribute, kAXSubroleAttribute, kAXMinimizedAttribute];
 
 struct CachedWindow {
     element: AxElement,
@@ -36,8 +40,13 @@ pub struct AxBackend {
     /// Apps that timed out, and when to try them again. Calls to them fail
     /// at once until then, so one hung app cannot stall every frame.
     stalled: RefCell<HashMap<i32, Instant>>,
-    /// Apps left out of the last `windows()` call because they were busy.
-    unresponsive: RefCell<Vec<i32>>,
+    /// Apps left out of the last `windows()` call, busy or unchanged.
+    skipped: RefCell<Vec<i32>>,
+    /// Each app's on-screen windows when its windows were last read. An app
+    /// whose set is unchanged and that sent no notification is not read again.
+    seen: RefCell<HashMap<i32, BTreeSet<WindowId>>>,
+    /// Application elements, kept between calls.
+    apps: RefCell<HashMap<i32, AxElement>>,
     /// Declared before `handler` so observers are torn down first.
     observers: RefCell<HashMap<i32, AppObserver>>,
     handler: Box<HandlerSlot>,
@@ -59,6 +68,24 @@ impl AxBackend {
             return Err(BackendError::Platform(format!("app {} is not responding", window.pid)));
         }
         Ok((window.element.clone(), window.pid))
+    }
+
+    fn app(&self, pid: i32) -> Option<AxElement> {
+        if let Some(app) = self.apps.borrow().get(&pid) {
+            return Some(app.clone());
+        }
+        let app = AxElement::application(pid)?;
+        self.apps.borrow_mut().insert(pid, app.clone());
+        Some(app)
+    }
+
+    /// Notes that `pid`'s windows were just written, so the next `windows()`
+    /// reads where they really went.
+    fn wrote(&self, pid: i32, result: Result<()>) -> Result<()> {
+        if result.is_ok() {
+            self.handler.mark(pid);
+        }
+        result
     }
 
     fn is_stalled(&self, pid: i32) -> bool {
@@ -108,54 +135,87 @@ impl WindowBackend for AxBackend {
         let own_pid = std::process::id() as i32;
         // Apps without on-screen windows only have minimized windows or
         // windows on other Spaces, none of which are tiled.
-        let mut names: HashMap<i32, &str> = HashMap::new();
-        for w in on_screen.values() {
-            names.entry(w.pid).or_insert(&w.owner_name);
+        let mut apps: BTreeMap<i32, (&str, BTreeSet<WindowId>)> = BTreeMap::new();
+        for (&id, w) in &on_screen {
+            if w.pid != own_pid {
+                apps.entry(w.pid).or_insert((&w.owner_name, BTreeSet::new())).1.insert(id);
+            }
         }
-        let pids: BTreeSet<i32> = names.keys().copied().filter(|&pid| pid != own_pid).collect();
 
+        let present: BTreeSet<i32> = apps.keys().copied().collect();
+        // The user drags windows of the front app without it notifying, so
+        // it is always read.
+        // shortcut: other apps' titles go stale until they notify; observe
+        // title changes if the switcher shows outdated titles.
+        let front = on_screen.values().filter(|w| w.pid != own_pid).min_by_key(|w| w.z_order).map(|w| w.pid);
+        let everything = self.handler.everything.replace(false);
+        let changed = std::mem::take(&mut *self.handler.changed.borrow_mut());
+        let mut seen = std::mem::take(&mut *self.seen.borrow_mut());
         let previous = std::mem::take(&mut *self.elements.borrow_mut());
         let mut observers = self.observers.borrow_mut();
         let mut elements = HashMap::new();
         let mut windows = Vec::new();
-        let mut unresponsive = Vec::new();
-        for pid in pids {
+        let mut skipped = Vec::new();
+        for (pid, (app_name, ids)) in apps {
             if self.is_stalled(pid) {
-                unresponsive.push(pid);
+                // It may change unnoticed while busy, so it is read once back.
+                seen.remove(&pid);
+                skipped.push(pid);
                 continue;
             }
-            let Some(app) = AxElement::application(pid) else { continue };
+            // Opening, closing, hiding, minimizing or moving a window to
+            // another Space changes the app's on-screen set or notifies.
+            if !everything && Some(pid) != front && !changed.contains(&pid) && seen.get(&pid) == Some(&ids) {
+                skipped.push(pid);
+                continue;
+            }
+            seen.remove(&pid);
+            let Some(app) = self.app(pid) else { continue };
             let app_windows = match self.timed(pid, || app.elements(kAXWindowsAttribute)) {
                 Ok(windows) => windows,
-                Err(err) if err == kAXErrorAPIDisabled => return Err(BackendError::NotTrusted),
+                Err(err) if err == kAXErrorAPIDisabled => {
+                    // What was taken above is lost, so read everything next time.
+                    self.handler.everything.set(true);
+                    return Err(BackendError::NotTrusted);
+                }
                 Err(_) => {
                     if self.is_stalled(pid) {
-                        unresponsive.push(pid);
+                        skipped.push(pid);
                     }
                     // Apps without Accessibility support are skipped.
                     continue;
                 }
             };
-            let app_name = names.get(&pid).copied().unwrap_or_default();
+            let mut complete = true;
             for element in app_windows {
                 let Some(id) = element.window_id() else { continue };
+                let values = match self.timed(pid, || element.values(&WINDOW_ATTRIBUTES)) {
+                    Ok(values) => values,
+                    Err(_) if self.is_stalled(pid) => {
+                        complete = false;
+                        break;
+                    }
+                    // The window closed meanwhile.
+                    Err(_) => continue,
+                };
+                let [position, size, title, subrole, minimized] = &values[..] else { continue };
                 // Windows on other Spaces are neither on screen nor minimized.
                 let (z_order, is_minimized) = match on_screen.get(&id) {
                     Some(w) => (w.z_order, false),
-                    None if element.bool(kAXMinimizedAttribute).unwrap_or(false) => (usize::MAX, true),
+                    None if minimized.as_ref().and_then(as_bool).unwrap_or(false) => (usize::MAX, true),
                     None => continue,
                 };
                 let is_standard = match previous.get(&id) {
                     Some(cached) => cached.is_standard,
-                    None => element.string(kAXSubroleAttribute).as_deref() == Some(kAXStandardWindowSubrole),
+                    None => subrole.as_ref().and_then(as_string).as_deref() == Some(kAXStandardWindowSubrole),
                 };
-                let origin = element.point(kAXPositionAttribute).unwrap_or_default();
-                let size = element.size(kAXSizeAttribute).unwrap_or_default();
+                let origin = position.as_ref().and_then(as_point).unwrap_or_default();
+                let size = size.as_ref().and_then(as_size).unwrap_or_default();
                 let info = WindowInfo {
                     id,
                     pid,
                     app_name: app_name.to_owned(),
-                    title: element.string(kAXTitleAttribute).unwrap_or_default(),
+                    title: title.as_ref().and_then(as_string).unwrap_or_default(),
                     frame: Rect::new(origin.x, origin.y, size.width, size.height),
                     is_standard,
                     is_minimized,
@@ -166,24 +226,36 @@ impl WindowBackend for AxBackend {
                 windows.push((z_order, info));
                 elements.insert(id, CachedWindow { element, pid, is_standard });
             }
+            if complete {
+                seen.insert(pid, ids);
+            } else {
+                skipped.push(pid);
+            }
         }
-        // Busy apps' windows still exist; keep their handles for later.
+        // Skipped apps' windows still exist; keep their handles for later.
         for (id, cached) in previous {
-            if unresponsive.contains(&cached.pid) {
+            if skipped.contains(&cached.pid) {
                 elements.entry(id).or_insert(cached);
             }
         }
+        // Forget apps that left the screen, so they are read when they return.
+        seen.retain(|pid, _| present.contains(pid));
         for observer in observers.values_mut() {
             observer.retain_windows(|id| elements.contains_key(&id));
         }
         windows.sort_by_key(|(z, w)| (*z, w.id));
         *self.elements.borrow_mut() = elements;
-        *self.unresponsive.borrow_mut() = unresponsive;
+        *self.seen.borrow_mut() = seen;
+        *self.skipped.borrow_mut() = skipped;
         Ok(windows.into_iter().map(|(_, w)| w).collect())
     }
 
-    fn unresponsive_apps(&self) -> Vec<i32> {
-        self.unresponsive.borrow().clone()
+    fn skipped_apps(&self) -> Vec<i32> {
+        self.skipped.borrow().clone()
+    }
+
+    fn invalidate(&self) {
+        self.handler.everything.set(true);
     }
 
     fn set_frame(&self, id: WindowId, frame: Rect) -> Result<()> {
@@ -199,19 +271,19 @@ impl WindowBackend for AxBackend {
                 .and_then(|()| element.set_point(kAXPositionAttribute, origin))
                 .and_then(|()| element.set_size(kAXSizeAttribute, size))
         });
-        result.map_err(|err| self.forget_on_error(err, id))
+        self.wrote(pid, result.map_err(|err| self.forget_on_error(err, id)))
     }
 
     fn set_position(&self, id: WindowId, x: f64, y: f64) -> Result<()> {
         let (element, pid) = self.element(id)?;
-        self.timed(pid, || element.set_point(kAXPositionAttribute, Point { x, y }))
-            .map_err(|err| self.forget_on_error(err, id))
+        let result = self.timed(pid, || element.set_point(kAXPositionAttribute, Point { x, y }));
+        self.wrote(pid, result.map_err(|err| self.forget_on_error(err, id)))
     }
 
     fn set_size(&self, id: WindowId, width: f64, height: f64) -> Result<()> {
         let (element, pid) = self.element(id)?;
-        self.timed(pid, || element.set_size(kAXSizeAttribute, Size { width, height }))
-            .map_err(|err| self.forget_on_error(err, id))
+        let result = self.timed(pid, || element.set_size(kAXSizeAttribute, Size { width, height }));
+        self.wrote(pid, result.map_err(|err| self.forget_on_error(err, id)))
     }
 
     fn focused_window(&self) -> Option<WindowId> {
@@ -225,7 +297,7 @@ impl WindowBackend for AxBackend {
 
     fn focus(&self, id: WindowId) -> Result<()> {
         let (element, pid) = self.element(id)?;
-        let app = AxElement::application(pid).ok_or(BackendError::WindowNotFound(id))?;
+        let app = self.app(pid).ok_or(BackendError::WindowNotFound(id))?;
         // Making the window main before activating the app keeps macOS from
         // bringing a different window of the same app forward.
         self.timed(pid, || {
@@ -240,20 +312,24 @@ impl WindowBackend for AxBackend {
         if pid == std::process::id() as i32 || self.observers.borrow().contains_key(&pid) {
             return;
         }
-        let Some(app) = AxElement::application(pid) else { return };
+        let Some(app) = self.app(pid) else { return };
         let context: *const HandlerSlot = &*self.handler;
         // SAFETY: `handler` is boxed and outlives `observers` (field order).
         if let Some(observer) = unsafe { AppObserver::new(pid, &app, context) } {
             self.observers.borrow_mut().insert(pid, observer);
+            // Windows it opened before it could be observed went unnoticed.
+            self.handler.mark(pid);
         }
     }
 
     fn forget_app(&self, pid: i32) {
         self.observers.borrow_mut().remove(&pid);
         self.stalled.borrow_mut().remove(&pid);
+        self.apps.borrow_mut().remove(&pid);
+        self.seen.borrow_mut().remove(&pid);
     }
 
     fn set_change_handler(&self, handler: Box<dyn Fn()>) {
-        *self.handler.borrow_mut() = Some(handler);
+        *self.handler.handler.borrow_mut() = Some(handler);
     }
 }
