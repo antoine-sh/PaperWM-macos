@@ -267,6 +267,8 @@ impl Workspace {
         };
         if center {
             self.center_focused(viewport, gap);
+            // Centred by the mode, not by request, so it ends with the mode.
+            self.centered = false;
         } else {
             self.ensure_focused_visible(viewport, gap);
         }
@@ -566,6 +568,17 @@ mod tests {
         // Once centring is off again, minimal scrolling takes over.
         ws.focus_column(-1);
         ws.follow_focus(CenterFocus::Never, VIEW, GAP);
+        assert_eq!(ws.scroll(), 0.0);
+    }
+
+    #[test]
+    fn centring_on_overflow_stops_once_the_strip_fits() {
+        let mut ws = workspace(&[300.0, 300.0, 300.0, 300.0]);
+        ws.focus_column(-1);
+        ws.follow_focus(CenterFocus::OnOverflow, VIEW, GAP);
+        assert!(ws.scroll() > 0.0);
+        ws.remove_window(4);
+        ws.follow_focus(CenterFocus::OnOverflow, VIEW, GAP);
         assert_eq!(ws.scroll(), 0.0);
     }
 
