@@ -14,6 +14,7 @@ final class WindowManager {
     var onStateChange: ((EngineState) -> Void)?
     private let minimap = Minimap()
     private let switcher = Switcher()
+    private let decorations = Decorations()
     private lazy var gestures = Gestures { [weak self] action in self?.perform(action) }
     private lazy var modifiers = ModifierWatcher { [weak self] in self?.superReleased() }
     private var syncScheduled = false
@@ -78,6 +79,8 @@ final class WindowManager {
             switcher.step(forward: forward, state: state)
             // A quick tap that is already over switches straight away.
             if !ModifierWatcher.superHeld { superReleased() }
+        case .toggle(let setting):
+            settings.values[keyPath: setting].toggle()
         }
     }
 
@@ -101,10 +104,12 @@ final class WindowManager {
             appliedShortcuts = shortcuts
             if !hotKeysPaused { hotKeys.register(settings.hotKeys) }
         }
+        decorations.apply(settings.values)
     }
 
     @discardableResult
     private func publish() -> EngineState? {
+        decorations.refresh()
         guard let state = engine.state() else { return nil }
         onStateChange?(state)
         return state
