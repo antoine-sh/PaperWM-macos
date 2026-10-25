@@ -79,6 +79,9 @@ pub trait WindowBackend {
     /// The window with keyboard focus, if it belongs to a regular app.
     fn focused_window(&self) -> Option<WindowId>;
 
+    /// The pid of the app with keyboard focus.
+    fn focused_app(&self) -> Option<i32>;
+
     /// Gives `id` keyboard focus and raises it.
     fn focus(&self, id: WindowId) -> Result<()>;
 

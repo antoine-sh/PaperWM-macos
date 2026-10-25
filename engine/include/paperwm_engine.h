@@ -127,7 +127,7 @@ bool pwm_engine_tick(PwmEngine *engine, double seconds, PwmStatus *status);
 bool pwm_engine_is_animating(const PwmEngine *engine);
 
 // Settings as JSON: {"gap": 8, "width_presets": [0.33, 0.5], "workspace_names": ["1", ...],
-// "animation_duration": 0.25}.
+// "animation_duration": 0.25, "center_focused": "never" | "on_overflow" | "always"}.
 // Missing fields keep their defaults; malformed JSON returns INVALID_ARGUMENT.
 PwmStatus pwm_engine_set_config(PwmEngine *engine, const char *json);
 
