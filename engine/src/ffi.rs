@@ -3,11 +3,11 @@
 //!
 //! All functions must be called from the main thread.
 
-use std::ffi::{c_char, CString};
+use std::ffi::{c_char, c_void, CString};
 use std::ptr;
 
 use crate::backend::{BackendError, WindowInfo};
-use crate::engine::Engine;
+use crate::engine::{Command, Engine};
 use crate::geometry::Rect;
 
 #[repr(C)]
@@ -18,6 +18,7 @@ pub enum PwmStatus {
     WindowNotFound = 2,
     PlatformError = 3,
     NullPointer = 4,
+    InvalidArgument = 5,
 }
 
 impl From<&BackendError> for PwmStatus {
@@ -153,31 +154,90 @@ pub unsafe extern "C" fn pwm_engine_set_window_frame(engine: *const Engine, id: 
     }
 }
 
-/// Tiles the windows on `area` into equal columns. On success, writes the
-/// number of tiled windows to `tiled` when it is not null.
-///
-/// # Safety
-/// `engine` must be a live pointer from `pwm_engine_new`, or null. `tiled`
-/// must be null or valid for writes.
-#[no_mangle]
-pub unsafe extern "C" fn pwm_engine_tile_columns(
-    engine: *const Engine,
-    area: Rect,
-    gap: f64,
-    tiled: *mut usize,
-) -> PwmStatus {
-    let Some(engine) = engine.as_ref() else {
-        return PwmStatus::NullPointer;
-    };
-    match engine.tile_columns(area, gap) {
-        Ok(count) => {
-            if !tiled.is_null() {
-                *tiled = count;
-            }
-            PwmStatus::Ok
-        }
+fn status(result: crate::backend::Result<impl Sized>) -> PwmStatus {
+    match result {
+        Ok(_) => PwmStatus::Ok,
         Err(err) => (&err).into(),
     }
+}
+
+/// Sets the usable area of each monitor, main monitor first.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null. `areas`
+/// must point to `count` rects.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_set_monitors(engine: *mut Engine, areas: *const Rect, count: usize) -> PwmStatus {
+    let Some(engine) = engine.as_mut() else {
+        return PwmStatus::NullPointer;
+    };
+    if areas.is_null() || count == 0 {
+        return PwmStatus::InvalidArgument;
+    }
+    status(engine.set_monitors(std::slice::from_raw_parts(areas, count)))
+}
+
+/// Brings the layout up to date with the current windows and focus.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_sync(engine: *mut Engine) -> PwmStatus {
+    let Some(engine) = engine.as_mut() else {
+        return PwmStatus::NullPointer;
+    };
+    status(engine.sync())
+}
+
+/// Runs one of the `PWM_COMMAND_*` actions.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_command(engine: *mut Engine, command: u32) -> PwmStatus {
+    let Some(engine) = engine.as_mut() else {
+        return PwmStatus::NullPointer;
+    };
+    let Ok(command) = Command::try_from(command) else {
+        return PwmStatus::InvalidArgument;
+    };
+    status(engine.command(command))
+}
+
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_observe_app(engine: *const Engine, pid: i32) {
+    if let Some(engine) = engine.as_ref() {
+        engine.observe_app(pid);
+    }
+}
+
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_forget_app(engine: *const Engine, pid: i32) {
+    if let Some(engine) = engine.as_ref() {
+        engine.forget_app(pid);
+    }
+}
+
+/// Registers `handler`, called with `context` on the main run loop when an
+/// observed app's windows change. It must not call back into the engine
+/// directly; schedule `pwm_engine_sync` instead.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null. `context`
+/// must stay valid for as long as the engine lives.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_set_change_handler(
+    engine: *const Engine,
+    handler: Option<extern "C" fn(*mut c_void)>,
+    context: *mut c_void,
+) {
+    let (Some(engine), Some(handler)) = (engine.as_ref(), handler) else { return };
+    let context = context as usize;
+    engine.set_change_handler(Box::new(move || handler(context as *mut c_void)));
 }
 
 #[cfg(test)]
@@ -220,21 +280,24 @@ mod tests {
         unsafe {
             assert_eq!(pwm_engine_list_windows(ptr::null()).status, PwmStatus::NullPointer);
             assert_eq!(pwm_engine_set_window_frame(ptr::null(), 1, Rect::default()), PwmStatus::NullPointer);
-            assert_eq!(
-                pwm_engine_tile_columns(ptr::null(), Rect::default(), 0.0, ptr::null_mut()),
-                PwmStatus::NullPointer
-            );
+            assert_eq!(pwm_engine_sync(ptr::null_mut()), PwmStatus::NullPointer);
+            assert_eq!(pwm_engine_command(ptr::null_mut(), 0), PwmStatus::NullPointer);
             pwm_engine_free(ptr::null_mut());
         }
     }
 
     #[test]
-    fn tile_and_move_report_status() {
+    fn commands_and_monitors_report_status() {
         let engine = raw_engine(vec![MockBackend::window(1, Rect::new(10.0, 10.0, 10.0, 10.0))]);
         unsafe {
-            let mut tiled = 0;
-            let status = pwm_engine_tile_columns(engine, Rect::new(0.0, 0.0, 100.0, 100.0), 0.0, &mut tiled);
-            assert_eq!((status, tiled), (PwmStatus::Ok, 1));
+            assert_eq!(pwm_engine_sync(engine), PwmStatus::Ok);
+            assert_eq!(pwm_engine_set_monitors(engine, ptr::null(), 0), PwmStatus::InvalidArgument);
+            let areas = [Rect::new(0.0, 0.0, 800.0, 600.0)];
+            assert_eq!(pwm_engine_set_monitors(engine, areas.as_ptr(), 1), PwmStatus::Ok);
+            assert_eq!(pwm_engine_sync(engine), PwmStatus::Ok);
+            assert_eq!((*engine).workspace(0).unwrap().focused_window(), Some(1));
+            assert_eq!(pwm_engine_command(engine, Command::FocusLeft as u32), PwmStatus::Ok);
+            assert_eq!(pwm_engine_command(engine, 99), PwmStatus::InvalidArgument);
             assert_eq!(pwm_engine_set_window_frame(engine, 9, Rect::default()), PwmStatus::WindowNotFound);
             pwm_engine_free(engine);
         }

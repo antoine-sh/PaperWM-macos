@@ -18,7 +18,25 @@ typedef enum {
     PWM_STATUS_WINDOW_NOT_FOUND = 2,
     PWM_STATUS_PLATFORM_ERROR = 3,
     PWM_STATUS_NULL_POINTER = 4,
+    PWM_STATUS_INVALID_ARGUMENT = 5,
 } PwmStatus;
+
+// Keyboard actions for pwm_engine_command. Mirrors engine::Command.
+typedef enum {
+    PWM_COMMAND_FOCUS_LEFT = 0,
+    PWM_COMMAND_FOCUS_RIGHT = 1,
+    PWM_COMMAND_FOCUS_UP = 2,
+    PWM_COMMAND_FOCUS_DOWN = 3,
+    PWM_COMMAND_MOVE_LEFT = 4,
+    PWM_COMMAND_MOVE_RIGHT = 5,
+    PWM_COMMAND_MOVE_UP = 6,
+    PWM_COMMAND_MOVE_DOWN = 7,
+    PWM_COMMAND_CYCLE_WIDTH = 8,
+    PWM_COMMAND_TOGGLE_FULL_WIDTH = 9,
+    PWM_COMMAND_CENTER = 10,
+    PWM_COMMAND_CONSUME = 11,
+    PWM_COMMAND_EXPEL = 12,
+} PwmCommand;
 
 // Top-left origin, y grows downwards (Accessibility coordinates).
 typedef struct {
@@ -60,9 +78,22 @@ void pwm_window_list_free(PwmWindowList list);
 
 PwmStatus pwm_engine_set_window_frame(const PwmEngine *engine, uint32_t id, PwmRect frame);
 
-// Tiles the windows on `area` into equal columns; writes the count to
-// `tiled` when it is not NULL.
-PwmStatus pwm_engine_tile_columns(const PwmEngine *engine, PwmRect area, double gap, size_t *tiled);
+// Usable area of each monitor (Accessibility coordinates), main one first.
+PwmStatus pwm_engine_set_monitors(PwmEngine *engine, const PwmRect *areas, size_t count);
+
+// Brings the layout up to date with the current windows and focus.
+PwmStatus pwm_engine_sync(PwmEngine *engine);
+
+// `command` is a PwmCommand value.
+PwmStatus pwm_engine_command(PwmEngine *engine, uint32_t command);
+
+// Start or stop watching an app's windows for changes.
+void pwm_engine_observe_app(const PwmEngine *engine, int32_t pid);
+void pwm_engine_forget_app(const PwmEngine *engine, int32_t pid);
+
+// `handler(context)` runs on the main run loop when observed windows change.
+// It must not call into the engine directly; schedule pwm_engine_sync.
+void pwm_engine_set_change_handler(const PwmEngine *engine, void (*handler)(void *context), void *context);
 
 #ifdef __cplusplus
 }

@@ -5,7 +5,8 @@ use std::ptr;
 
 use accessibility_sys::{
     kAXErrorAPIDisabled, kAXErrorCannotComplete, kAXErrorInvalidUIElement, kAXErrorSuccess, kAXValueTypeCGPoint,
-    kAXValueTypeCGSize, AXError, AXUIElementCopyAttributeValue, AXUIElementCreateApplication, AXUIElementRef,
+    kAXValueTypeCGSize, AXError, AXUIElementCopyAttributeValue, AXUIElementCreateApplication,
+    AXUIElementCreateSystemWide, AXUIElementGetPid, AXUIElementGetTypeID, AXUIElementPerformAction, AXUIElementRef,
     AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout, AXValueCreate, AXValueGetTypeID, AXValueGetValue,
     AXValueRef, AXValueType,
 };
@@ -38,6 +39,19 @@ impl AxElement {
         }
         unsafe { AXUIElementSetMessagingTimeout(element, MESSAGING_TIMEOUT) };
         Some(Self(element))
+    }
+
+    pub fn system_wide() -> Self {
+        Self(unsafe { AXUIElementCreateSystemWide() })
+    }
+
+    pub fn as_raw(&self) -> AXUIElementRef {
+        self.0
+    }
+
+    pub fn pid(&self) -> Option<i32> {
+        let mut pid = 0;
+        (unsafe { AXUIElementGetPid(self.0, &mut pid) } == kAXErrorSuccess).then_some(pid)
     }
 
     /// Wraps a reference the caller does not own, retaining it.
@@ -74,6 +88,37 @@ impl AxElement {
             return None;
         }
         Some(value.as_CFTypeRef() == unsafe { kCFBooleanTrue } as CFTypeRef)
+    }
+
+    /// An element-valued attribute such as `AXFocusedWindow`.
+    pub fn element(&self, attribute: &'static str) -> Option<AxElement> {
+        let value = self.copy(attribute).ok()?;
+        let raw = value.as_CFTypeRef();
+        if unsafe { CFGetTypeID(raw) } != unsafe { AXUIElementGetTypeID() } {
+            return None;
+        }
+        Some(unsafe { AxElement::retained(raw as AXUIElementRef) })
+    }
+
+    pub fn set_true(&self, attribute: &'static str) -> Result<(), AXError> {
+        let name = CFString::from_static_string(attribute);
+        let err =
+            unsafe { AXUIElementSetAttributeValue(self.0, name.as_concrete_TypeRef(), kCFBooleanTrue as CFTypeRef) };
+        if err == kAXErrorSuccess {
+            Ok(())
+        } else {
+            Err(err)
+        }
+    }
+
+    pub fn perform(&self, action: &'static str) -> Result<(), AXError> {
+        let name = CFString::from_static_string(action);
+        let err = unsafe { AXUIElementPerformAction(self.0, name.as_concrete_TypeRef()) };
+        if err == kAXErrorSuccess {
+            Ok(())
+        } else {
+            Err(err)
+        }
     }
 
     fn ax_value<T: Default>(&self, attribute: &'static str, kind: AXValueType) -> Option<T> {

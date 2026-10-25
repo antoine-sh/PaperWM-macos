@@ -59,4 +59,19 @@ pub trait WindowBackend {
     fn windows(&self) -> Result<Vec<WindowInfo>>;
 
     fn set_frame(&self, id: WindowId, frame: Rect) -> Result<()>;
+
+    /// The window with keyboard focus, if it belongs to a regular app.
+    fn focused_window(&self) -> Option<WindowId>;
+
+    /// Gives `id` keyboard focus and raises it.
+    fn focus(&self, id: WindowId) -> Result<()>;
+
+    /// Starts watching the app `pid` for window changes.
+    fn observe_app(&self, _pid: i32) {}
+
+    fn forget_app(&self, _pid: i32) {}
+
+    /// Called, outside any engine call, when an observed app's windows
+    /// change. It should schedule a sync rather than sync directly.
+    fn set_change_handler(&self, _handler: Box<dyn Fn()>) {}
 }
