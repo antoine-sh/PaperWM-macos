@@ -536,13 +536,19 @@ impl Engine {
         if raise.is_empty() {
             raise.extend(after.filter(|&id| Some(id) != before));
         }
-        if after.is_none() && raise.is_empty() {
+        // A pan never hides or leaves a window, and arrives every frame.
+        if after.is_none() && raise.is_empty() && !matches!(command, Command::ScrollBy(_)) {
             // Nothing to focus here, so macOS keeps focus on a window we just
             // hid or left; following it on the next sync would undo this.
             self.stale_focus = self.backend.focused_window();
         }
-        for id in raise {
-            self.focus(id)?;
+        if !raise.is_empty() {
+            // Asked once: macOS moves focus asynchronously, so it would not
+            // have changed between raises anyway.
+            let previous = self.backend.focused_window();
+            for id in raise {
+                self.focus(id, previous)?;
+            }
         }
         Ok(changed)
     }
@@ -583,8 +589,8 @@ impl Engine {
         self.monitors.get(self.active).and_then(|m| self.workspaces[m.workspace].focused_window())
     }
 
-    fn focus(&mut self, id: WindowId) -> Result<()> {
-        let previous = self.backend.focused_window();
+    /// Focuses `id`; `previous` is the system focus before the engine moved it.
+    fn focus(&mut self, id: WindowId, previous: Option<WindowId>) -> Result<()> {
         match self.backend.focus(id) {
             Ok(()) => {
                 self.stale_focus = previous.filter(|&p| p != id);
@@ -1153,6 +1159,28 @@ mod tests {
         engine.sync().unwrap();
         assert_eq!(engine.command(Command::MoveToScratch), Ok(true));
         (engine, backend)
+    }
+
+    #[test]
+    fn pans_and_raises_ask_for_focus_sparingly() {
+        let (mut engine, backend) = engine_with(vec![]);
+        engine.sync().unwrap();
+        let asked = backend.focus_queries();
+        for _ in 0..5 {
+            engine.command(Command::ScrollBy(5.0)).unwrap();
+        }
+        assert_eq!(backend.focus_queries(), asked);
+
+        let (mut engine, backend) = engine_with_scratch();
+        backend.add(window(3, 800.0, 300.0));
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        engine.command(Command::MoveToScratch).unwrap();
+        engine.command(Command::ToggleScratch).unwrap();
+        let asked = backend.focus_queries();
+        // Shows and raises both scratch windows.
+        assert_eq!(engine.command(Command::ToggleScratch), Ok(true));
+        assert_eq!(backend.focus_queries(), asked + 1);
     }
 
     #[test]
