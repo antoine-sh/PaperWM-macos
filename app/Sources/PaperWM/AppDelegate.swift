@@ -70,6 +70,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
                 menu.addItem(.separator())
             }
+            let border = action("Focus Border", #selector(toggleSetting(_:)))
+            border.representedObject = \Settings.Values.focusBorder
+            border.state = manager.settings.values.focusBorder ? .on : .off
+            menu.addItem(border)
+            let dim = action("Dim Background Windows", #selector(toggleSetting(_:)))
+            dim.representedObject = \Settings.Values.dimBackground
+            dim.state = manager.settings.values.dimBackground ? .on : .off
+            menu.addItem(dim)
+            menu.addItem(.separator())
             menu.addItem(action("Re-tile Now", #selector(retile)))
             let shortcuts = NSMenuItem(title: "Keyboard Shortcuts", action: nil, keyEquivalent: "")
             let submenu = NSMenu()
@@ -101,6 +110,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func switchWorkspace(_ sender: NSMenuItem) {
         manager?.perform(.engine(PWM_COMMAND_SWITCH_WORKSPACE, Double(sender.tag)))
+    }
+
+    @objc private func toggleSetting(_ sender: NSMenuItem) {
+        guard let setting = sender.representedObject as? WritableKeyPath<Settings.Values, Bool> else { return }
+        manager?.perform(.toggle(setting))
     }
 
     @objc private func openSettings() {

@@ -15,8 +15,9 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 - **Window switcher**: ⌃⌥Tab through recently used windows across all workspaces, with live previews if you grant Screen Recording permission (app icons otherwise).
 - **Trackpad**: hold ⌃⌥ and scroll with two fingers sideways to pan the strip (focus lands on the column in the middle when you let go), or up/down to switch workspace. macOS reserves three-finger swipes, so this stands in for PaperWM's.
 - **Minimap**: an overview of the strip appears briefly while you navigate. In Settings, pick the strip view or a small toolbar of app icons along the bottom of the screen (one per column, focused one highlighted).
-- **Menu bar**: shows the current workspace's name; the menu switches workspaces and opens Settings.
-- **Settings** (⌘, from the menu): gaps, column width presets, scroll animation length (0 turns it off), workspace names, and every shortcut can be re-recorded.
+- **Focus highlight**: optionally draw a colored border around the focused window and dim the windows behind it. Both are off by default; turn them on from the menu, Settings or their shortcuts.
+- **Menu bar**: shows the current workspace's name; the menu switches workspaces, toggles the focus border and dimming, and opens Settings.
+- **Settings** (⌘, from the menu): gaps, column width presets, scroll animation length (0 turns it off), workspace names, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
 
 ### Keyboard shortcuts
 
@@ -44,6 +45,8 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 | ⌃⌥⌘⇧ ← / → | Move the window to the monitor on the left / right |
 | ⌃⌥ Esc | Show or hide the scratch layer |
 | ⌃⌥⇧ Esc | Move the window to or from the scratch layer |
+| ⌃⌥ B | Show or hide the focus border |
+| ⌃⌥ D | Dim background windows on or off |
 
 ### Permissions
 
