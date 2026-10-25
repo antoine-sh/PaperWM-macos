@@ -51,6 +51,13 @@ struct SettingsView: View {
                 ColorPicker("Border color", selection: borderColor, supportsOpacity: false)
                 Stepper("Border width: \(Int(settings.values.borderWidth)) pt", value: $settings.values.borderWidth,
                         in: 1...16)
+                Stepper("Corner radius: \(Int(settings.values.cornerRadius)) pt",
+                        value: $settings.values.cornerRadius, in: 0...40)
+                Text(Thumbnails.hasAccess
+                     ? "Each window's own corners are measured; this is used until then."
+                     : "Grant Screen Recording permission to match each window's own corners.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section("Background windows") {
                 Toggle("Dim windows behind the focused one", isOn: $settings.values.dimBackground)
