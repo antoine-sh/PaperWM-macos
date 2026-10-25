@@ -120,11 +120,11 @@ struct HotKey {
             key("toggle-border", "Show or Hide Focus Border", kVK_ANSI_B, base, .toggle(\.focusBorder)),
             key("toggle-dim", "Dim Background Windows", kVK_ANSI_D, base, .toggle(\.dimBackground)),
         ]
-        for n in 1...9 {
+        for n in 1...Int(PWM_WORKSPACE_COUNT) {
             keys.append(key("switch-workspace-\(n)", "Switch to Workspace \(n)", digitKeys[n], base,
                             .engine(PWM_COMMAND_SWITCH_WORKSPACE, Double(n - 1))))
         }
-        for n in 1...9 {
+        for n in 1...Int(PWM_WORKSPACE_COUNT) {
             keys.append(key("move-to-workspace-\(n)", "Move Window to Workspace \(n)", digitKeys[n], shift,
                             .engine(PWM_COMMAND_MOVE_TO_WORKSPACE, Double(n - 1))))
         }

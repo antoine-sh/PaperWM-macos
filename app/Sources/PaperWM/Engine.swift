@@ -16,7 +16,8 @@ struct ManagedWindow {
 enum EngineError: Error, CustomStringConvertible {
     case notTrusted
     case windowNotFound
-    case platform
+    /// macOS refused or did not answer, with the engine's explanation.
+    case platform(String)
     case nullPointer
     case invalidArgument
     case unknown(UInt32)
@@ -27,7 +28,7 @@ enum EngineError: Error, CustomStringConvertible {
         case PWM_STATUS_OK: return nil
         case PWM_STATUS_NOT_TRUSTED: self = .notTrusted
         case PWM_STATUS_WINDOW_NOT_FOUND: self = .windowNotFound
-        case PWM_STATUS_PLATFORM_ERROR: self = .platform
+        case PWM_STATUS_PLATFORM_ERROR: self = .platform(String(cString: pwm_last_error()))
         case PWM_STATUS_NULL_POINTER: self = .nullPointer
         case PWM_STATUS_INVALID_ARGUMENT: self = .invalidArgument
         default: self = .unknown(status.rawValue)
@@ -38,7 +39,7 @@ enum EngineError: Error, CustomStringConvertible {
         switch self {
         case .notTrusted: "PaperWM needs Accessibility permission to manage windows."
         case .windowNotFound: "The window no longer exists."
-        case .platform: "macOS refused the request."
+        case .platform(let message): "macOS refused the request: \(message)"
         case .nullPointer: "The engine is not running."
         case .invalidArgument: "The engine rejected an invalid request."
         case .unknown(let code): "Unexpected engine error \(code)."
@@ -82,10 +83,6 @@ final class Engine {
         }
     }
 
-    func setFrame(of windowID: UInt32, to frame: CGRect) throws {
-        if let error = EngineError(pwm_engine_set_window_frame(handle, windowID, PwmRect(frame))) { throw error }
-    }
-
     /// Usable area of each monitor in Accessibility coordinates, main one first.
     func setMonitors(_ areas: [CGRect]) throws {
         let rects = areas.map(PwmRect.init)
@@ -98,22 +95,45 @@ final class Engine {
         if let error = EngineError(pwm_engine_sync(handle)) { throw error }
     }
 
-    func run(_ command: PwmCommand, arg: Double = 0) throws {
-        if let error = EngineError(pwm_engine_command(handle, command.rawValue, arg)) { throw error }
+    /// Puts every window back in its place and syncs.
+    func retile() throws {
+        if let error = EngineError(pwm_engine_retile(handle)) { throw error }
+    }
+
+    /// Runs `command`. Returns whether it changed anything.
+    @discardableResult
+    func run(_ command: PwmCommand, arg: Double = 0) throws -> Bool {
+        var changed = false
+        if let error = EngineError(pwm_engine_command(handle, command.rawValue, arg, &changed)) { throw error }
+        return changed
     }
 
     /// Advances strip slides by `seconds`. Returns whether one is still sliding.
-    func tick(_ seconds: Double) -> Bool {
-        pwm_engine_tick(handle, seconds)
+    func tick(_ seconds: Double) throws -> Bool {
+        var status = PWM_STATUS_OK
+        let sliding = pwm_engine_tick(handle, seconds, &status)
+        if let error = EngineError(status) { throw error }
+        return sliding
     }
+
+    /// Whether a strip is sliding, so `tick` should run every frame.
+    var isAnimating: Bool { pwm_engine_is_animating(handle) }
+
+    private static let decoder: JSONDecoder = {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return decoder
+    }()
 
     /// The current layout, or nil if the engine could not describe it.
     func state() -> EngineState? {
         guard let json = pwm_engine_state_json(handle) else { return nil }
         defer { pwm_string_free(json) }
-        let decoder = JSONDecoder()
-        decoder.keyDecodingStrategy = .convertFromSnakeCase
-        return try? decoder.decode(EngineState.self, from: Data(String(cString: json).utf8))
+        // Decode the engine's buffer in place rather than copying it twice.
+        let data = Data(bytesNoCopy: UnsafeMutableRawPointer(json), count: strlen(json), deallocator: .none)
+        guard var state = try? Self.decoder.decode(EngineState.self, from: data) else { return nil }
+        state.indexWindows()
+        return state
     }
 
     /// Applies settings given as `engine::Config` JSON.
@@ -152,11 +172,17 @@ extension CGRect {
     }
 }
 
+extension CGRect {
+    /// Converts between Accessibility coordinates (top-left origin, y down)
+    /// and Cocoa coordinates (bottom-left origin, y up); the flip is the
+    /// same both ways.
+    var flippedForScreens: CGRect {
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        return CGRect(x: minX, y: primaryHeight - maxY, width: width, height: height)
+    }
+}
+
 extension NSScreen {
     /// `visibleFrame` converted to Accessibility coordinates.
-    var accessibilityVisibleFrame: CGRect {
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? frame.height
-        let visible = visibleFrame
-        return CGRect(x: visible.minX, y: primaryHeight - visible.maxY, width: visible.width, height: visible.height)
-    }
+    var accessibilityVisibleFrame: CGRect { visibleFrame.flippedForScreens }
 }
