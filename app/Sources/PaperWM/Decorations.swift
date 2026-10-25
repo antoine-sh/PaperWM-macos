@@ -13,6 +13,9 @@ final class Decorations {
     private var values = Settings.Values()
     private var timer: Timer?
     private var focusedID: CGWindowID?
+    /// Measured corner radius of each window seen so far; nil while measuring
+    /// or when it couldn't be measured.
+    private var radii: [CGWindowID: CGFloat?] = [:]
 
     init() {
         border = Self.panel(level: .floating)
@@ -43,9 +46,14 @@ final class Decorations {
         let changed = focused?.id != focusedID
         focusedID = focused?.id
         let frame = focused.map { Self.cocoaRect($0.frame) }
+        let radius = focused.map { self.radius(of: $0.id) } ?? 0
 
         if values.focusBorder, let frame {
             let width = values.borderWidth
+            if borderView.radius != radius {
+                borderView.radius = radius
+                borderView.needsDisplay = true
+            }
             border.setFrame(frame.insetBy(dx: -width, dy: -width), display: true)
             border.orderFrontRegardless()
         } else {
@@ -72,13 +80,28 @@ final class Decorations {
             // The hole keeps the focused window clear even if macOS refuses to
             // order the dim below another app's window.
             let hole = frame.offsetBy(dx: -screen.minX, dy: -screen.minY)
-            if view.hole != hole || view.amount != values.dimAmount {
+            if view.hole != hole || view.amount != values.dimAmount || view.radius != radius {
                 view.hole = hole
                 view.amount = values.dimAmount
+                view.radius = radius
                 view.needsDisplay = true
             }
             if changed || !panel.isVisible { panel.order(.below, relativeTo: Int(focused.id)) }
         }
+    }
+
+    /// The window's own corner radius once measured, the setting until then.
+    private func radius(of id: CGWindowID) -> CGFloat {
+        if let measured = radii[id] {
+            return measured ?? CGFloat(values.cornerRadius)
+        }
+        radii[id] = .some(nil)
+        Task { [weak self] in
+            let measured = await WindowCorners.radius(of: id)
+            self?.radii[id] = .some(measured)
+            if measured != nil { self?.refresh() }
+        }
+        return CGFloat(values.cornerRadius)
     }
 
     /// The front window of the frontmost app, in Accessibility coordinates.
@@ -119,17 +142,16 @@ final class Decorations {
     }
 }
 
-/// macOS window corners are about this round.
-private let cornerRadius: CGFloat = 10
-
 private final class BorderView: NSView {
     var color: NSColor = .controlAccentColor
     var width: CGFloat = 4
+    /// The window's corner radius; the ring's outer edge is rounder by `width`.
+    var radius: CGFloat = 10
 
     override func draw(_ dirtyRect: NSRect) {
         let inset = width / 2
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: inset, dy: inset),
-                                xRadius: cornerRadius + inset, yRadius: cornerRadius + inset)
+                                xRadius: radius + inset, yRadius: radius + inset)
         path.lineWidth = width
         color.setStroke()
         path.stroke()
@@ -139,11 +161,12 @@ private final class BorderView: NSView {
 private final class DimView: NSView {
     var amount: Double = 0.3
     var hole: CGRect?
+    var radius: CGFloat = 10
 
     override func draw(_ dirtyRect: NSRect) {
         let path = NSBezierPath(rect: bounds)
         if let hole {
-            path.append(NSBezierPath(roundedRect: hole, xRadius: cornerRadius, yRadius: cornerRadius))
+            path.append(NSBezierPath(roundedRect: hole, xRadius: radius, yRadius: radius))
             path.windingRule = .evenOdd
         }
         NSColor.black.withAlphaComponent(amount).setFill()

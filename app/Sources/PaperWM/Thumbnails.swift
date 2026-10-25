@@ -29,3 +29,44 @@ enum Thumbnails {
         return images
     }
 }
+
+/// Measures how round a window's corners are, which differs between apps and
+/// macOS versions. Needs Screen Recording permission, like the previews.
+enum WindowCorners {
+    /// The radius in points, or nil without permission or a usable image.
+    static func radius(of id: UInt32) async -> CGFloat? {
+        guard Thumbnails.hasAccess,
+              let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
+              let window = content.windows.first(where: { $0.windowID == id }),
+              window.frame.width > 0, window.frame.height > 0 else { return nil }
+        let configuration = SCStreamConfiguration()
+        configuration.width = Int(window.frame.width * 2)
+        configuration.height = Int(window.frame.height * 2)
+        configuration.showsCursor = false
+        configuration.ignoreShadowsSingleWindow = true
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+        guard let image = try? await SCScreenshotManager.captureImage(contentFilter: filter,
+                                                                    configuration: configuration) else { return nil }
+        return radius(in: image, scale: CGFloat(image.width) / window.frame.width)
+    }
+
+    /// Walks the top-left corner's diagonal to the first opaque pixel, which
+    /// for a rounded corner of radius r lies r(1 - 1/√2) in on each axis.
+    static func radius(in image: CGImage, scale: CGFloat) -> CGFloat? {
+        let size = min(image.width, image.height, Int(64 * scale))
+        guard size > 0, let corner = image.cropping(to: CGRect(x: 0, y: 0, width: size, height: size)),
+              let context = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8,
+                                      bytesPerRow: size * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue),
+              let data = context.data else { return nil }
+        context.draw(corner, in: CGRect(x: 0, y: 0, width: size, height: size))
+        // Row 0 of the buffer is the top of the image.
+        let pixels = data.bindMemory(to: UInt8.self, capacity: size * size * 4)
+        // An opaque corner pixel more likely means the capture lost its alpha
+        // than a square window, so it doesn't count as a measurement.
+        for d in 1..<max(size, 1) where pixels[(d * size + d) * 4 + 3] > 128 {
+            return pixels[3] > 128 ? nil : CGFloat(d) / (1 - 1 / 2.0.squareRoot()) / scale
+        }
+        return nil
+    }
+}
