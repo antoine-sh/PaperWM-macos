@@ -102,6 +102,11 @@ final class Engine {
         if let error = EngineError(pwm_engine_command(handle, command.rawValue, arg)) { throw error }
     }
 
+    /// Advances strip slides by `seconds`. Returns whether one is still sliding.
+    func tick(_ seconds: Double) -> Bool {
+        pwm_engine_tick(handle, seconds)
+    }
+
     /// The current layout, or nil if the engine could not describe it.
     func state() -> EngineState? {
         guard let json = pwm_engine_state_json(handle) else { return nil }

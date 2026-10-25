@@ -6,7 +6,7 @@ use std::collections::{BTreeSet, HashMap};
 use accessibility_sys::{
     kAXFocusedApplicationAttribute, kAXFocusedWindowAttribute, kAXFrontmostAttribute, kAXMainAttribute,
     kAXMinimizedAttribute, kAXPositionAttribute, kAXRaiseAction, kAXSizeAttribute, kAXStandardWindowSubrole,
-    kAXSubroleAttribute, kAXTitleAttribute, kAXWindowsAttribute,
+    kAXSubroleAttribute, kAXTitleAttribute, kAXWindowsAttribute, AXError,
 };
 
 use super::ax::{to_backend_error, AxElement};
@@ -35,6 +35,15 @@ impl AxBackend {
         }
         self.windows()?;
         self.elements.borrow().get(&id).cloned().ok_or(BackendError::WindowNotFound(id))
+    }
+
+    /// Maps an AX error, dropping the cached handle of a window that is gone.
+    fn forget_on_error(&self, err: AXError, id: WindowId) -> BackendError {
+        let err = to_backend_error(err, id);
+        if err == BackendError::WindowNotFound(id) {
+            self.elements.borrow_mut().remove(&id);
+        }
+        err
     }
 }
 
@@ -106,13 +115,12 @@ impl WindowBackend for AxBackend {
             .set_size(kAXSizeAttribute, size)
             .and_then(|()| element.set_point(kAXPositionAttribute, origin))
             .and_then(|()| element.set_size(kAXSizeAttribute, size));
-        result.map_err(|err| {
-            let err = to_backend_error(err, id);
-            if err == BackendError::WindowNotFound(id) {
-                self.elements.borrow_mut().remove(&id);
-            }
-            err
-        })
+        result.map_err(|err| self.forget_on_error(err, id))
+    }
+
+    fn set_position(&self, id: WindowId, x: f64, y: f64) -> Result<()> {
+        let element = self.element(id)?;
+        element.set_point(kAXPositionAttribute, Point { x, y }).map_err(|err| self.forget_on_error(err, id))
     }
 
     fn focused_window(&self) -> Option<WindowId> {

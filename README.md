@@ -8,7 +8,7 @@ The window-management engine is written in Rust and the user interface in Swift,
 
 Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tested by hand on a real Mac.
 
-- **Scrolling strip**: every window opens as a new column to the right of the focused one, focusing a column scrolls it into view, and columns can be rearranged, resized and stacked from the keyboard. Dialogs, sheets and other non-standard windows float. Columns that scroll off screen are parked at the screen edge, since macOS doesn't allow hiding windows entirely off screen.
+- **Scrolling strip**: every window opens as a new column to the right of the focused one, focusing a column slides the strip to bring it into view, and columns can be rearranged, resized and stacked from the keyboard. Dialogs, sheets and other non-standard windows float. Columns that scroll off screen are parked at the screen edge, since macOS doesn't allow hiding windows entirely off screen.
 - **Workspaces**: nine PaperWM workspaces, independent of macOS Spaces (keep everything on one Space). Each monitor shows one; the others' windows are tucked into a screen corner. Focusing a window that lives on a hidden workspace (⌘Tab, Dock, a click on a notification) brings its workspace in.
 - **Monitors**: focus or move windows to the monitor on the left or right.
 - **Scratch layer**: floating windows above the workspaces that you can show or hide together.
@@ -17,7 +17,7 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 - **Minimap**: an overview of the strip appears briefly while you navigate. In Settings, pick the strip view or a small toolbar of app icons along the bottom of the screen (one per column, focused one highlighted).
 - **Focus highlight**: optionally draw a colored border around the focused window and dim the windows behind it. Both are off by default; turn them on from the menu, Settings or their shortcuts.
 - **Menu bar**: shows the current workspace's name; the menu switches workspaces, toggles the focus border and dimming, and opens Settings.
-- **Settings** (⌘, from the menu): gaps, column width presets, workspace names, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
+- **Settings** (⌘, from the menu): gaps, column width presets, scroll animation length (0 turns it off), workspace names, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
 
 ### Keyboard shortcuts
 

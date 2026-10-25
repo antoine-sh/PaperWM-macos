@@ -60,6 +60,9 @@ pub trait WindowBackend {
 
     fn set_frame(&self, id: WindowId, frame: Rect) -> Result<()>;
 
+    /// Moves `id` without resizing it.
+    fn set_position(&self, id: WindowId, x: f64, y: f64) -> Result<()>;
+
     /// The window with keyboard focus, if it belongs to a regular app.
     fn focused_window(&self) -> Option<WindowId>;
 
