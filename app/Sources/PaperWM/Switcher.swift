@@ -64,8 +64,9 @@ final class Switcher {
         Self.askForScreenRecordingOnce()
         let ids = model.windows.map(\.id)
         thumbnailTask = Task { [model] in
-            let images = await Thumbnails.capture(ids: ids, maxSize: SwitcherView.cardSize.width)
-            if !Task.isCancelled { model.thumbnails = images }
+            await Thumbnails.capture(ids: ids, maxSize: SwitcherView.cardSize.width) { id, image in
+                if !Task.isCancelled { model.thumbnails[id] = image }
+            }
         }
     }
 
@@ -121,7 +122,7 @@ private struct SwitcherView: View {
             Group {
                 if let image = model.thumbnails[window.id] {
                     Image(decorative: image, scale: 2).resizable().aspectRatio(contentMode: .fit)
-                } else if let icon = NSRunningApplication(processIdentifier: window.pid)?.icon {
+                } else if let icon = AppIcons.icon(for: window.pid) {
                     Image(nsImage: icon).resizable().aspectRatio(contentMode: .fit).padding(24)
                 } else {
                     Image(systemName: "macwindow").resizable().aspectRatio(contentMode: .fit).padding(36)

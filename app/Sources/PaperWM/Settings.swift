@@ -1,3 +1,4 @@
+import CPaperWMEngine
 import Foundation
 
 enum MinimapStyle: String, Codable {
@@ -14,7 +15,7 @@ final class Settings: ObservableObject {
         var gap: Double = 8
         /// Fractions of the screen width that Cycle Column Width steps through.
         var widthPresets: [Double] = [1.0 / 3.0, 0.5, 2.0 / 3.0]
-        var workspaceNames: [String] = (1...9).map { String($0) }
+        var workspaceNames: [String] = (1...Int(PWM_WORKSPACE_COUNT)).map { String($0) }
         /// Seconds the strip takes to scroll; 0 jumps.
         var animationDuration: Double = 0.25
         /// Shortcut overrides by `HotKey.id`; missing ids use the default.

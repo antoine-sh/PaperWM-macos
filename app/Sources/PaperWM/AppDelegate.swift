@@ -125,7 +125,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func retile() {
-        manager?.syncNow()
+        manager?.retile()
     }
 
     @objc private func showWindows() {
