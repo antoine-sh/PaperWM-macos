@@ -199,6 +199,9 @@ pub struct Engine {
     active: usize,
     /// The workspace shown before the latest switch, for `LastWorkspace`.
     last_workspace: Option<usize>,
+    /// Floating windows above all workspaces, with the frame each returns to.
+    scratch: Vec<(WindowId, Rect)>,
+    scratch_visible: bool,
     /// System focus seen just before the engine last moved focus. macOS
     /// applies focus changes asynchronously, so until the reported focus
     /// differs from this, it is old news and must not be followed.
@@ -218,6 +221,8 @@ impl Engine {
             monitors: Vec::new(),
             active: 0,
             last_workspace: None,
+            scratch: Vec::new(),
+            scratch_visible: true,
             stale_focus: None,
             applied: HashMap::new(),
             info: HashMap::new(),
@@ -277,6 +282,7 @@ impl Engine {
             .workspaces
             .iter()
             .flat_map(Workspace::windows)
+            .chain(self.scratch.iter().map(|&(id, _)| id))
             .filter_map(|id| self.info.get(&id))
             .map(|w| WindowState { id: w.id, pid: w.pid, app_name: w.app_name.clone(), title: w.title.clone() })
             .collect();
@@ -287,8 +293,8 @@ impl Engine {
             workspaces,
             windows,
             mru: Vec::new(),
-            scratch: Vec::new(),
-            scratch_visible: true,
+            scratch: self.scratch.iter().map(|&(id, _)| id).collect(),
+            scratch_visible: self.scratch_visible,
         }
     }
 
@@ -328,7 +334,14 @@ impl Engine {
             windows.iter().filter(|w| w.is_tileable()).map(|w| (w.id, w)).collect();
         self.info = tileable.iter().map(|(&id, &w)| (id, w.clone())).collect();
 
-        let mut managed = HashSet::new();
+        self.scratch.retain(|(id, _)| tileable.contains_key(id));
+        if self.scratch_visible {
+            // Keep wherever the user dragged them.
+            for (id, frame) in &mut self.scratch {
+                *frame = tileable[id].frame;
+            }
+        }
+        let mut managed: HashSet<WindowId> = self.scratch.iter().map(|&(id, _)| id).collect();
         for workspace in &mut self.workspaces {
             let gone: Vec<WindowId> = workspace.windows().filter(|id| !tileable.contains_key(id)).collect();
             for id in gone {
@@ -370,6 +383,8 @@ impl Engine {
         let viewport = self.viewport(self.active);
         let current = self.monitors[self.active].workspace;
         let before = self.focused_window();
+        // Set by commands that decide focus themselves.
+        let mut raise = Vec::new();
         let ws = &mut self.workspaces[current];
         let changed = match command {
             Command::FocusLeft => ws.focus_column(-1),
@@ -401,6 +416,8 @@ impl Engine {
             Command::FocusMonitorRight => self.focus_monitor(true),
             Command::MoveToMonitorLeft => self.move_to_monitor(false),
             Command::MoveToMonitorRight => self.move_to_monitor(true),
+            Command::ToggleScratch => self.toggle_scratch(&mut raise),
+            Command::MoveToScratch => self.move_to_scratch(&mut raise),
             _ => false,
         };
         if command != Command::Center {
@@ -409,7 +426,10 @@ impl Engine {
 
         self.apply()?;
         let after = self.focused_window();
-        if let Some(id) = after.filter(|&id| Some(id) != before) {
+        if raise.is_empty() {
+            raise.extend(after.filter(|&id| Some(id) != before));
+        }
+        for id in raise {
             self.focus(id)?;
         }
         Ok(changed)
@@ -486,6 +506,48 @@ impl Engine {
         true
     }
 
+    /// Shows or hides the scratch layer. Shown windows are raised; hiding
+    /// returns focus to the active workspace.
+    fn toggle_scratch(&mut self, raise: &mut Vec<WindowId>) -> bool {
+        if self.scratch.is_empty() {
+            return false;
+        }
+        self.scratch_visible = !self.scratch_visible;
+        if self.scratch_visible {
+            raise.extend(self.scratch.iter().map(|&(id, _)| id));
+        } else {
+            raise.extend(self.focused_window());
+        }
+        true
+    }
+
+    /// Floats the focused tiled window in the scratch layer, centred on the
+    /// active monitor, or tiles the focused scratch window again.
+    fn move_to_scratch(&mut self, raise: &mut Vec<WindowId>) -> bool {
+        let current = self.monitors[self.active].workspace;
+        let system_focus = self.backend.focused_window();
+        if let Some(index) = self.scratch.iter().position(|&(id, _)| Some(id) == system_focus) {
+            let (id, frame) = self.scratch.remove(index);
+            let viewport = self.viewport(self.active);
+            self.workspaces[current].insert_window(id, frame.width, viewport);
+            return true;
+        }
+        let Some(id) = self.focused_window() else { return false };
+        self.workspaces[current].remove_window(id);
+        let size = self.applied.get(&id).or(self.info.get(&id).map(|w| &w.frame)).copied().unwrap_or_default();
+        let area = self.monitors[self.active].area;
+        let frame = Rect::new(
+            area.x + (area.width - size.width) / 2.0,
+            area.y + (area.height - size.height) / 2.0,
+            size.width,
+            size.height,
+        );
+        self.scratch.push((id, frame));
+        self.scratch_visible = true;
+        raise.push(id);
+        true
+    }
+
     /// The nearest monitor whose centre is right (or left) of the active one's.
     fn monitor_toward(&self, right: bool) -> Option<usize> {
         let centre = |m: &Monitor| m.area.x + m.area.width / 2.0;
@@ -550,6 +612,9 @@ impl Engine {
                 let frame = self.applied.get(&id).or(self.info.get(&id).map(|w| &w.frame)).copied().unwrap_or_default();
                 frames.push((id, placement::hidden_frame(frame, &areas)));
             }
+        }
+        for &(id, frame) in &self.scratch {
+            frames.push((id, if self.scratch_visible { frame } else { placement::hidden_frame(frame, &areas) }));
         }
         for (id, frame) in frames {
             if self.applied.get(&id).is_some_and(|f| approx_eq(*f, frame)) {
@@ -911,6 +976,60 @@ mod tests {
         assert_eq!(engine.state().active_monitor, 1);
         assert_eq!(backend.focused_window(), Some(1));
         assert!(backend.frame_of(1).unwrap().x >= RIGHT.x);
+    }
+
+    /// Engine with windows 1 and 2 tiled and 2 moved to the scratch layer.
+    fn engine_with_scratch() -> (Engine, Rc<MockBackend>) {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        assert_eq!(engine.command(Command::MoveToScratch), Ok(true));
+        (engine, backend)
+    }
+
+    #[test]
+    fn move_to_scratch_floats_window_centered() {
+        let (engine, backend) = engine_with_scratch();
+        assert_eq!(columns(&engine), vec![vec![1]]);
+        assert_eq!(engine.state().scratch, vec![2]);
+        // 300x584 centred on the 1016x600 screen at y 25.
+        assert_eq!(backend.frame_of(2), Some(Rect::new(358.0, 33.0, 300.0, 584.0)));
+        assert_eq!(backend.focused_window(), Some(2));
+    }
+
+    #[test]
+    fn toggle_scratch_parks_and_restores() {
+        let (mut engine, backend) = engine_with_scratch();
+        backend.update(2, |w| w.frame = Rect::new(100.0, 100.0, 400.0, 300.0));
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        assert_eq!(engine.command(Command::ToggleScratch), Ok(true));
+        assert!(!engine.state().scratch_visible);
+        assert!(is_hidden(backend.frame_of(2).unwrap()));
+        assert_eq!(engine.command(Command::ToggleScratch), Ok(true));
+        assert_eq!(backend.frame_of(2), Some(Rect::new(100.0, 100.0, 400.0, 300.0)));
+        assert_eq!(backend.focused_window(), Some(2));
+    }
+
+    #[test]
+    fn move_to_scratch_again_returns_to_tiling() {
+        let (mut engine, backend) = engine_with_scratch();
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1]]);
+        backend.set_focused(Some(2));
+        assert_eq!(engine.command(Command::MoveToScratch), Ok(true));
+        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+        assert!(engine.state().scratch.is_empty());
+        assert_eq!(backend.frame_of(2).unwrap().x, 316.0);
+    }
+
+    #[test]
+    fn closed_scratch_window_is_forgotten() {
+        let (mut engine, backend) = engine_with_scratch();
+        backend.remove(2);
+        engine.sync().unwrap();
+        assert!(engine.state().scratch.is_empty());
     }
 
     #[test]
