@@ -32,6 +32,10 @@ impl Column {
     pub fn focused_window(&self) -> WindowId {
         self.windows[self.focused_row]
     }
+
+    pub fn focused_row(&self) -> usize {
+        self.focused_row
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -64,6 +68,10 @@ impl Workspace {
 
     pub fn windows(&self) -> impl Iterator<Item = WindowId> + '_ {
         self.columns.iter().flat_map(|c| c.windows.iter().copied())
+    }
+
+    pub fn focused_column(&self) -> usize {
+        self.focused
     }
 
     pub fn focused_window(&self) -> Option<WindowId> {

@@ -98,8 +98,8 @@ final class Engine {
         if let error = EngineError(pwm_engine_sync(handle)) { throw error }
     }
 
-    func run(_ command: PwmCommand) throws {
-        if let error = EngineError(pwm_engine_command(handle, command.rawValue)) { throw error }
+    func run(_ command: PwmCommand, arg: Double = 0) throws {
+        if let error = EngineError(pwm_engine_command(handle, command.rawValue, arg)) { throw error }
     }
 
     func observeApp(_ pid: pid_t) {

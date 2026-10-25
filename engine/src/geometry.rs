@@ -17,7 +17,7 @@ pub struct Size {
     pub height: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, serde::Serialize)]
 #[repr(C)]
 pub struct Rect {
     pub x: f64,
