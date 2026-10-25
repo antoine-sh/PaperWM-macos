@@ -6,18 +6,27 @@ The window-management engine is written in Rust and the user interface in Swift,
 
 ## Status
 
-Early but usable. Each monitor gets a PaperWM-style scrolling strip: every window opens as a new column to the right of the focused one, focusing a column scrolls it into view, and columns can be rearranged, resized and stacked from the keyboard. Dialogs, sheets and other non-standard windows float. Columns that scroll off screen are parked at the screen edge, since macOS doesn't allow hiding windows entirely off screen.
+Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tested by hand on a real Mac.
 
-Not yet: workspaces (switching macOS Spaces drops the windows of the old Space from the layout), moving windows between monitors, the scratch layer, gestures and configuration. See the roadmap below.
+- **Scrolling strip**: every window opens as a new column to the right of the focused one, focusing a column scrolls it into view, and columns can be rearranged, resized and stacked from the keyboard. Dialogs, sheets and other non-standard windows float. Columns that scroll off screen are parked at the screen edge, since macOS doesn't allow hiding windows entirely off screen.
+- **Workspaces**: nine PaperWM workspaces, independent of macOS Spaces (keep everything on one Space). Each monitor shows one; the others' windows are tucked into a screen corner. Focusing a window that lives on a hidden workspace (⌘Tab, Dock, a click on a notification) brings its workspace in.
+- **Monitors**: focus or move windows to the monitor on the left or right.
+- **Scratch layer**: floating windows above the workspaces that you can show or hide together.
+- **Window switcher**: ⌃⌥Tab through recently used windows across all workspaces, with live previews if you grant Screen Recording permission (app icons otherwise).
+- **Trackpad**: hold ⌃⌥ and scroll with two fingers sideways to pan the strip (focus lands on the column in the middle when you let go), or up/down to switch workspace. macOS reserves three-finger swipes, so this stands in for PaperWM's.
+- **Minimap**: an overview of the strip appears briefly while you navigate.
+- **Menu bar**: shows the current workspace's name; the menu switches workspaces and opens Settings.
+- **Settings** (⌘, from the menu): gaps, column width presets, workspace names, and every shortcut can be re-recorded.
 
 ### Keyboard shortcuts
 
-⌃⌥ stands in for PaperWM's Super key.
+⌃⌥ stands in for PaperWM's Super key and ⌃⌥⌘ for Super+Ctrl. All of these can be changed in Settings.
 
 | Shortcut | Action |
 | --- | --- |
 | ⌃⌥ ← / → | Focus the column on the left / right |
 | ⌃⌥ ↑ / ↓ | Focus the window above / below in the column |
+| ⌃⌥ Home / End | Focus the first / last column |
 | ⌃⌥⇧ ← / → | Move the column left / right |
 | ⌃⌥⇧ ↑ / ↓ | Move the window up / down in its column |
 | ⌃⌥ R | Cycle column width (⅓, ½, ⅔ of the screen) |
@@ -25,6 +34,21 @@ Not yet: workspaces (switching macOS Spaces drops the windows of the old Space f
 | ⌃⌥ C | Center the column |
 | ⌃⌥ I | Pull the next column's window into this column |
 | ⌃⌥ O | Push the focused window out into its own column |
+| ⌃⌥ Tab / ⌃⌥⇧ Tab | Switch windows (release ⌃⌥ to pick, ⌃⌥ Esc to cancel) |
+| ⌃⌥ 1…9 | Switch to workspace 1…9 |
+| ⌃⌥⇧ 1…9 | Move the window to workspace 1…9 |
+| ⌃⌥ PageDown / PageUp | Next / previous workspace |
+| ⌃⌥⇧ PageDown / PageUp | Move the window to the next / previous workspace |
+| ⌃⌥ \` | Back to the last used workspace |
+| ⌃⌥⌘ ← / → | Focus the monitor on the left / right |
+| ⌃⌥⌘⇧ ← / → | Move the window to the monitor on the left / right |
+| ⌃⌥ Esc | Show or hide the scratch layer |
+| ⌃⌥⇧ Esc | Move the window to or from the scratch layer |
+
+### Permissions
+
+- **Accessibility** (required): to move, resize and focus windows, and to read the trackpad while ⌃⌥ is held.
+- **Screen Recording** (optional): only for window previews in the switcher. macOS asks the first time you open the switcher.
 
 ## Building
 
@@ -52,8 +76,8 @@ cargo test
 
 | Path | Contents |
 | --- | --- |
-| `engine/` | Rust engine: scrolling layout (`workspace.rs`, `placement.rs`), window sync and commands (`engine.rs`), macOS Accessibility backend (`macos/`), C interface (`ffi.rs`, `include/paperwm_engine.h`) |
-| `app/` | Swift menu bar app (SwiftPM package): hot keys, app and monitor tracking; links the engine as a static library |
+| `engine/` | Rust engine: scrolling layout (`workspace.rs`, `placement.rs`), workspaces, monitors, scratch layer, window sync and commands (`engine.rs`), macOS Accessibility backend (`macos/`), C interface (`ffi.rs`, `include/paperwm_engine.h`) |
+| `app/` | Swift menu bar app (SwiftPM package): hot keys, settings, minimap, switcher, trackpad gestures, app and monitor tracking; links the engine as a static library |
 | `scripts/build-app.sh` | Builds both and assembles `build/PaperWM.app` |
 | `scripts/make-dmg.sh` | Packages the app as a `.dmg` |
 
@@ -61,5 +85,5 @@ cargo test
 
 1. **Skeleton and proof of concept**: Rust engine, Swift shell, `.app` bundling, CI.
 2. **Core scrolling layout**: a horizontal strip of columns per workspace and monitor, keyboard focus and movement, resizing, one tile per window of multi-window apps, floating dialogs.
-3. **Feature parity**: hotkeys, workspaces, scratch layer, window switcher, trackpad gestures, workspace indicator, minimap, settings.
+3. **Feature parity** (done): hotkeys, workspaces, scratch layer, window switcher, trackpad gestures, workspace indicator, minimap, settings.
 4. **Packaging and polish**: Accessibility onboarding, launch at login, config file, signed and notarized releases.
