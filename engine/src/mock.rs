@@ -10,6 +10,7 @@ pub struct MockBackend {
     windows: RefCell<Vec<WindowInfo>>,
     focused: Cell<Option<WindowId>>,
     set_frame_calls: Cell<usize>,
+    focus_queries: Cell<usize>,
     trusted: bool,
     /// Like macOS, `focus` returns before focus has actually moved.
     focus_is_async: Cell<bool>,
@@ -74,6 +75,11 @@ impl MockBackend {
     pub fn set_frame_calls(&self) -> usize {
         self.set_frame_calls.get()
     }
+
+    /// How often `focused_window` was asked, each two round trips on macOS.
+    pub fn focus_queries(&self) -> usize {
+        self.focus_queries.get()
+    }
 }
 
 impl WindowBackend for MockBackend {
@@ -118,6 +124,7 @@ impl WindowBackend for MockBackend {
     }
 
     fn focused_window(&self) -> Option<WindowId> {
+        self.focus_queries.set(self.focus_queries.get() + 1);
         self.focused.get()
     }
 
