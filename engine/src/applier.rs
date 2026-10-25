@@ -51,11 +51,14 @@ impl FrameApplier {
     }
 
     /// Whether `id` was moved since it was placed without being resized, as
-    /// when dragged by its title bar.
+    /// when dragged by its title bar. A window that went back to the same
+    /// wrong place it refused before was not moved.
     pub fn moved(&self, id: WindowId, actual: Rect) -> bool {
-        self.get(id).is_some_and(|applied| {
-            !within(applied, actual, DRIFT) && within(applied, Rect { x: applied.x, y: applied.y, ..actual }, DRIFT)
-        })
+        let Some(applied) = self.get(id) else { return false };
+        if self.refused.get(&id).is_some_and(|&(a, b)| within(a, applied, SAME) && within(b, actual, DRIFT)) {
+            return false;
+        }
+        !within(applied, actual, DRIFT) && within(applied, Rect { x: applied.x, y: applied.y, ..actual }, DRIFT)
     }
 
     /// Moves each window to its frame, with as few Accessibility calls as

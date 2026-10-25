@@ -444,7 +444,8 @@ impl Engine {
         }
 
         if let Some(point) = drop {
-            self.drop_window(point, &fresh);
+            let focused = self.backend.focused_window();
+            self.drop_window(point, focused, &fresh);
         }
 
         // Tiled windows on screen that the user or their app moved.
@@ -752,19 +753,23 @@ impl Engine {
 
     /// Moves the tiled window that was dragged to `point`, if any, into the
     /// place of the column under it. Returns whether one was.
-    fn drop_window(&mut self, point: Point, fresh: &HashSet<WindowId>) -> bool {
-        let Some(monitor) = self.monitors.iter().position(|m| contains(m.area, point)) else { return false };
-        // The dragged window moved without resizing and is still under the
-        // pointer, which holds its title bar.
-        let dragged = self
-            .monitors
-            .iter()
-            .flat_map(|m| self.workspaces[m.workspace].windows())
-            .filter(|id| fresh.contains(id))
-            .find(|id| contains(self.info[id].frame, point) && self.applier.moved(*id, self.info[id].frame));
-        let Some(id) = dragged else { return false };
-        let Some(source) = self.workspaces.iter().position(|w| w.contains(id)) else { return false };
+    fn drop_window(&mut self, point: Point, focused: Option<WindowId>, fresh: &HashSet<WindowId>) -> bool {
+        let Some(monitor) = self.monitors.iter().position(|m| m.area.contains(point)) else { return false };
         let target = self.monitors[monitor].workspace;
+        // Clicking the title bar focused the dragged window, which moved
+        // without resizing and is still under the pointer. Sliding strips
+        // only have windows in motion.
+        let Some(id) = focused.filter(|id| fresh.contains(id)) else { return false };
+        let Some(source) = self.workspaces.iter().position(|w| w.contains(id)) else { return false };
+        let frame = self.info[&id].frame;
+        if !self.monitors.iter().any(|m| m.workspace == source)
+            || self.animator.is_moving(source)
+            || self.animator.is_moving(target)
+            || !frame.contains(point)
+            || !self.applier.moved(id, frame)
+        {
+            return false;
+        }
         let gap = self.config.gap;
         let strip_x = point.x - self.monitors[monitor].area.x - gap + self.animator.shown(target);
         let column = self.workspaces[target].column_at(strip_x, gap).unwrap_or(0);
@@ -788,7 +793,7 @@ impl Engine {
 
     fn monitor_at(&self, frame: Rect) -> Option<usize> {
         let centre = Point { x: frame.x + frame.width / 2.0, y: frame.y + frame.height / 2.0 };
-        self.monitors.iter().position(|m| contains(m.area, centre))
+        self.monitors.iter().position(|m| m.area.contains(centre))
     }
 
     fn ensure_visible_all(&mut self) {
@@ -842,10 +847,6 @@ impl Engine {
         }
         self.applier.write(self.backend.as_ref(), frames)
     }
-}
-
-fn contains(rect: Rect, point: Point) -> bool {
-    point.x >= rect.x && point.x < rect.max_x() && point.y >= rect.y && point.y < rect.max_y()
 }
 
 #[cfg(test)]
@@ -1493,6 +1494,7 @@ mod tests {
         engine.sync().unwrap();
         let placed = backend.frame_of(1).unwrap();
         drag(&backend, 1, 100.0);
+        backend.set_focused(Some(1));
         engine.drop_at(200.0, 50.0).unwrap();
         assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
         assert_eq!(backend.frame_of(1), Some(placed));
@@ -1502,6 +1504,7 @@ mod tests {
     fn resizing_or_clicking_rearranges_nothing() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
         engine.sync().unwrap();
+        backend.set_focused(Some(1));
         // Dragging the left edge moves and resizes.
         backend.update(1, |w| {
             w.frame.x += 400.0;
@@ -1511,6 +1514,31 @@ mod tests {
         assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
         engine.drop_at(450.0, 50.0).unwrap();
         assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn only_the_focused_window_counts_as_dragged() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        // Window 1 strayed on its own, under where the user drags window 2.
+        drag(&backend, 1, 300.0);
+        drag(&backend, 2, 10.0);
+        backend.set_focused(Some(2));
+        engine.drop_at(350.0, 50.0).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn drop_on_a_sliding_strip_rearranges_nothing() {
+        let (mut engine, backend) = sliding_engine();
+        engine.command(Command::FocusFirst).unwrap();
+        engine.tick(0.05).unwrap();
+        // Window 1 dragged over window 2's place.
+        let over = backend.frame_of(2).unwrap().x - backend.frame_of(1).unwrap().x;
+        drag(&backend, 1, over);
+        backend.set_focused(Some(1));
+        engine.drop_at(backend.frame_of(2).unwrap().x + 10.0, 50.0).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2], vec![3]]);
     }
 
     #[test]
