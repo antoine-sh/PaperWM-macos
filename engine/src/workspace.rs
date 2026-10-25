@@ -32,6 +32,10 @@ impl Column {
     pub fn focused_window(&self) -> WindowId {
         self.windows[self.focused_row]
     }
+
+    pub fn focused_row(&self) -> usize {
+        self.focused_row
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -64,6 +68,10 @@ impl Workspace {
 
     pub fn windows(&self) -> impl Iterator<Item = WindowId> + '_ {
         self.columns.iter().flat_map(|c| c.windows.iter().copied())
+    }
+
+    pub fn focused_column(&self) -> usize {
+        self.focused
     }
 
     pub fn focused_window(&self) -> Option<WindowId> {
@@ -226,12 +234,42 @@ impl Workspace {
         } else if x + width > self.scroll + viewport {
             self.scroll = x + width - viewport;
         }
+        // Never leave empty space before the first column, e.g. after a pan.
+        self.scroll = self.scroll.max(0.0);
     }
 
     pub fn center_focused(&mut self, viewport: f64, gap: f64) {
         if let Some(column) = self.columns.get(self.focused) {
             self.scroll = self.column_x(self.focused, gap) + column.width / 2.0 - viewport / 2.0;
         }
+    }
+
+    /// Pans the strip without changing focus, stopping half a viewport past
+    /// either end.
+    pub fn scroll_by(&mut self, dx: f64, viewport: f64, gap: f64) {
+        let max = (self.strip_width(gap) - viewport / 2.0).max(-viewport / 2.0);
+        self.scroll = (self.scroll + dx).clamp(-viewport / 2.0, max);
+    }
+
+    /// Focuses the column whose centre is closest to the viewport's.
+    pub fn focus_nearest_centre(&mut self, viewport: f64, gap: f64) -> bool {
+        let middle = self.scroll + viewport / 2.0;
+        let distance = |i: usize| (self.column_x(i, gap) + self.columns[i].width / 2.0 - middle).abs();
+        let Some(nearest) = (0..self.columns.len()).min_by(|&a, &b| distance(a).total_cmp(&distance(b))) else {
+            return false;
+        };
+        let changed = nearest != self.focused;
+        self.focused = nearest;
+        changed
+    }
+
+    /// Focuses the first column, or the last with `last`.
+    pub fn focus_edge(&mut self, last: bool) -> bool {
+        let Some(end) = self.columns.len().checked_sub(1) else { return false };
+        let target = if last { end } else { 0 };
+        let changed = target != self.focused;
+        self.focused = target;
+        changed
     }
 
     fn offset(&self, from: usize, delta: isize, len: usize) -> Option<usize> {
@@ -442,6 +480,41 @@ mod tests {
         assert_ne!(ws.scroll(), 0.0);
         ws.ensure_focused_visible(VIEW, GAP);
         assert_eq!(ws.scroll(), 0.0);
+    }
+
+    #[test]
+    fn scroll_by_clamps_to_half_a_viewport_past_either_end() {
+        let mut ws = workspace(&[600.0, 600.0, 600.0]);
+        ws.scroll_by(5000.0, VIEW, GAP);
+        assert_eq!(ws.scroll(), 1820.0 - VIEW / 2.0);
+        ws.scroll_by(-10000.0, VIEW, GAP);
+        assert_eq!(ws.scroll(), -VIEW / 2.0);
+    }
+
+    #[test]
+    fn focus_nearest_centre_picks_column_under_middle() {
+        let mut ws = workspace(&[600.0, 600.0, 600.0]);
+        ws.focus_column(-2);
+        ws.ensure_focused_visible(VIEW, GAP);
+        ws.focus_column(2);
+        assert!(ws.focus_nearest_centre(VIEW, GAP));
+        assert_eq!(ws.focused_window(), Some(1));
+        ws.scroll_by(700.0, VIEW, GAP);
+        assert!(ws.focus_nearest_centre(VIEW, GAP));
+        assert_eq!(ws.focused_window(), Some(2));
+        assert!(!ws.focus_nearest_centre(VIEW, GAP));
+        assert!(!Workspace::default().focus_nearest_centre(VIEW, GAP));
+    }
+
+    #[test]
+    fn focus_edge_jumps_to_first_and_last_column() {
+        let mut ws = workspace(&[300.0, 300.0, 300.0]);
+        assert!(ws.focus_edge(false));
+        assert_eq!(ws.focused_window(), Some(1));
+        assert!(!ws.focus_edge(false));
+        assert!(ws.focus_edge(true));
+        assert_eq!(ws.focused_window(), Some(3));
+        assert!(!Workspace::default().focus_edge(true));
     }
 
     #[test]

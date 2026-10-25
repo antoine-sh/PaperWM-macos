@@ -11,6 +11,8 @@ pub struct MockBackend {
     focused: Cell<Option<WindowId>>,
     set_frame_calls: Cell<usize>,
     trusted: bool,
+    /// Like macOS, `focus` returns before focus has actually moved.
+    focus_is_async: Cell<bool>,
 }
 
 impl MockBackend {
@@ -54,6 +56,10 @@ impl MockBackend {
         self.focused.set(id);
     }
 
+    pub fn set_focus_is_async(&self, value: bool) {
+        self.focus_is_async.set(value);
+    }
+
     pub fn frame_of(&self, id: WindowId) -> Option<Rect> {
         self.windows.borrow().iter().find(|w| w.id == id).map(|w| w.frame)
     }
@@ -94,7 +100,9 @@ impl WindowBackend for MockBackend {
         if !self.windows.borrow().iter().any(|w| w.id == id) {
             return Err(BackendError::WindowNotFound(id));
         }
-        self.focused.set(Some(id));
+        if !self.focus_is_async.get() {
+            self.focused.set(Some(id));
+        }
         Ok(())
     }
 }

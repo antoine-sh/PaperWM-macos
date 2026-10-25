@@ -1,4 +1,5 @@
 import AppKit
+import CPaperWMEngine
 
 /// Menu bar app hosting the window manager.
 @main
@@ -7,6 +8,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var manager: WindowManager?
     private var statusItem: NSStatusItem?
     private var trustTimer: Timer?
+    private var state: EngineState?
+    private let settingsWindow = SettingsWindowController()
 
     static func main() {
         let app = NSApplication.shared
@@ -47,6 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard manager == nil else { return }
         let manager = WindowManager()
         self.manager = manager
+        manager.onStateChange = { [weak self] state in self?.show(state) }
         manager.start()
     }
 
@@ -56,17 +60,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(disabled("PaperWM \(Engine.version)"))
 
         if let manager {
-            menu.addItem(disabled("Tiling windows"))
             menu.addItem(.separator())
+            if let state {
+                for (index, workspace) in state.workspaces.enumerated() {
+                    let item = action(workspace.name, #selector(switchWorkspace(_:)))
+                    item.tag = index
+                    item.state = index == state.activeWorkspace ? .on : .off
+                    menu.addItem(item)
+                }
+                menu.addItem(.separator())
+            }
             menu.addItem(action("Re-tile Now", #selector(retile)))
             let shortcuts = NSMenuItem(title: "Keyboard Shortcuts", action: nil, keyEquivalent: "")
             let submenu = NSMenu()
             for hotKey in manager.hotKeys.hotKeys {
-                submenu.addItem(disabled("\(hotKey.symbol)\t\(hotKey.title)"))
+                submenu.addItem(disabled("\(hotKey.combo.symbol)\t\(hotKey.title)"))
             }
             shortcuts.submenu = submenu
             menu.addItem(shortcuts)
             menu.addItem(action("Show Windows…", #selector(showWindows)))
+            let settings = action("Settings…", #selector(openSettings))
+            settings.keyEquivalent = ","
+            menu.addItem(settings)
         } else {
             menu.addItem(disabled("Accessibility access needed"))
             menu.addItem(action("Grant Accessibility Access…", #selector(grantAccess)))
@@ -74,6 +89,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: "Quit PaperWM", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
+    }
+
+    /// Shows the active workspace's name next to the menu bar icon.
+    private func show(_ state: EngineState) {
+        self.state = state
+        let name = state.activeWorkspace.map { state.workspaces[$0].name } ?? ""
+        statusItem?.button?.title = name.isEmpty ? "" : " \(name)"
+        statusItem?.button?.imagePosition = .imageLeading
+    }
+
+    @objc private func switchWorkspace(_ sender: NSMenuItem) {
+        manager?.perform(.engine(PWM_COMMAND_SWITCH_WORKSPACE, Double(sender.tag)))
+    }
+
+    @objc private func openSettings() {
+        guard let manager else { return }
+        settingsWindow.show(settings: manager.settings, failed: manager.hotKeys.failed) { [weak manager] recording in
+            manager?.setHotKeysPaused(recording)
+        }
     }
 
     @objc private func retile() {
