@@ -58,10 +58,19 @@ pub trait WindowBackend {
     /// All windows of regular apps on the current Space, front to back.
     fn windows(&self) -> Result<Vec<WindowInfo>>;
 
+    /// Apps that did not answer during the last [`windows`](Self::windows)
+    /// call. Their windows are missing from it but still exist.
+    fn unresponsive_apps(&self) -> Vec<i32> {
+        Vec::new()
+    }
+
     fn set_frame(&self, id: WindowId, frame: Rect) -> Result<()>;
 
     /// Moves `id` without resizing it.
     fn set_position(&self, id: WindowId, x: f64, y: f64) -> Result<()>;
+
+    /// Resizes `id` without moving it.
+    fn set_size(&self, id: WindowId, width: f64, height: f64) -> Result<()>;
 
     /// The window with keyboard focus, if it belongs to a regular app.
     fn focused_window(&self) -> Option<WindowId>;

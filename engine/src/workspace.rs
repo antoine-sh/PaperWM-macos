@@ -44,6 +44,9 @@ pub struct Workspace {
     focused: usize,
     /// Strip x shown at the left edge of the viewport.
     scroll: f64,
+    /// Whether `scroll` was set by centering, which the minimal scrolling
+    /// of `ensure_focused_visible` must not undo.
+    centered: bool,
 }
 
 /// Narrowest column the layout produces.
@@ -221,14 +224,19 @@ impl Workspace {
     pub fn ensure_focused_visible(&mut self, viewport: f64, gap: f64) {
         if self.columns.is_empty() {
             self.scroll = 0.0;
-            return;
-        }
-        if self.strip_width(gap) <= viewport {
-            self.scroll = 0.0;
+            self.centered = false;
             return;
         }
         let x = self.column_x(self.focused, gap);
         let width = self.columns[self.focused].width;
+        if self.centered && x >= self.scroll && x + width <= self.scroll + viewport {
+            return;
+        }
+        self.centered = false;
+        if self.strip_width(gap) <= viewport {
+            self.scroll = 0.0;
+            return;
+        }
         if width >= viewport || x < self.scroll {
             self.scroll = x;
         } else if x + width > self.scroll + viewport {
@@ -241,6 +249,7 @@ impl Workspace {
     pub fn center_focused(&mut self, viewport: f64, gap: f64) {
         if let Some(column) = self.columns.get(self.focused) {
             self.scroll = self.column_x(self.focused, gap) + column.width / 2.0 - viewport / 2.0;
+            self.centered = true;
         }
     }
 
@@ -249,12 +258,27 @@ impl Workspace {
     pub fn scroll_by(&mut self, dx: f64, viewport: f64, gap: f64) {
         let max = (self.strip_width(gap) - viewport / 2.0).max(-viewport / 2.0);
         self.scroll = (self.scroll + dx).clamp(-viewport / 2.0, max);
+        self.centered = false;
+    }
+
+    /// Strip x of the left edge of every column.
+    pub fn column_xs(&self, gap: f64) -> Vec<f64> {
+        let mut x = 0.0;
+        self.columns
+            .iter()
+            .map(|c| {
+                let left = x;
+                x += c.width + gap;
+                left
+            })
+            .collect()
     }
 
     /// Focuses the column whose centre is closest to the viewport's.
     pub fn focus_nearest_centre(&mut self, viewport: f64, gap: f64) -> bool {
         let middle = self.scroll + viewport / 2.0;
-        let distance = |i: usize| (self.column_x(i, gap) + self.columns[i].width / 2.0 - middle).abs();
+        let xs = self.column_xs(gap);
+        let distance = |i: usize| (xs[i] + self.columns[i].width / 2.0 - middle).abs();
         let Some(nearest) = (0..self.columns.len()).min_by(|&a, &b| distance(a).total_cmp(&distance(b))) else {
             return false;
         };
@@ -476,10 +500,33 @@ mod tests {
     #[test]
     fn strip_that_fits_stays_flush_left() {
         let mut ws = workspace(&[300.0, 300.0]);
-        ws.center_focused(VIEW, GAP);
-        assert_ne!(ws.scroll(), 0.0);
+        ws.scroll_by(100.0, VIEW, GAP);
         ws.ensure_focused_visible(VIEW, GAP);
         assert_eq!(ws.scroll(), 0.0);
+    }
+
+    #[test]
+    fn centering_survives_until_the_focused_column_leaves_the_viewport() {
+        let mut ws = workspace(&[300.0, 300.0]);
+        ws.focus_column(-1);
+        ws.center_focused(VIEW, GAP);
+        let centred = ws.scroll();
+        assert!(centred < 0.0);
+        ws.ensure_focused_visible(VIEW, GAP);
+        assert_eq!(ws.scroll(), centred);
+
+        let mut ws = workspace(&[600.0, 600.0, 600.0]);
+        ws.center_focused(VIEW, GAP);
+        ws.focus_column(-2);
+        ws.ensure_focused_visible(VIEW, GAP);
+        assert_eq!(ws.scroll(), 0.0);
+    }
+
+    #[test]
+    fn column_xs_lists_left_edges() {
+        let ws = workspace(&[300.0, 400.0, 500.0]);
+        assert_eq!(ws.column_xs(GAP), vec![0.0, 310.0, 720.0]);
+        assert_eq!(ws.column_xs(GAP)[2], ws.column_x(2, GAP));
     }
 
     #[test]

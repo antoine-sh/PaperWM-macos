@@ -3,6 +3,7 @@
 //!
 //! All functions must be called from the main thread.
 
+use std::cell::RefCell;
 use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
 
@@ -141,24 +142,26 @@ pub unsafe extern "C" fn pwm_window_list_free(list: PwmWindowList) {
     }
 }
 
-/// # Safety
-/// `engine` must be a live pointer from `pwm_engine_new`, or null.
-#[no_mangle]
-pub unsafe extern "C" fn pwm_engine_set_window_frame(engine: *const Engine, id: u32, frame: Rect) -> PwmStatus {
-    let Some(engine) = engine.as_ref() else {
-        return PwmStatus::NullPointer;
-    };
-    match engine.backend().set_frame(id, frame) {
-        Ok(()) => PwmStatus::Ok,
-        Err(err) => (&err).into(),
-    }
+thread_local! {
+    static LAST_ERROR: RefCell<CString> = RefCell::default();
 }
 
 fn status(result: crate::backend::Result<impl Sized>) -> PwmStatus {
     match result {
         Ok(_) => PwmStatus::Ok,
-        Err(err) => (&err).into(),
+        Err(err) => {
+            LAST_ERROR
+                .with(|last| *last.borrow_mut() = CString::new(err.to_string().replace('\0', "")).unwrap_or_default());
+            (&err).into()
+        }
     }
+}
+
+/// What went wrong in the latest call that failed, for logs. Valid until the
+/// next failing call.
+#[no_mangle]
+pub extern "C" fn pwm_last_error() -> *const c_char {
+    LAST_ERROR.with(|last| last.borrow().as_ptr())
 }
 
 /// Sets the usable area of each monitor, main monitor first.
@@ -189,30 +192,80 @@ pub unsafe extern "C" fn pwm_engine_sync(engine: *mut Engine) -> PwmStatus {
     status(engine.sync())
 }
 
-/// Runs one of the `PWM_COMMAND_*` actions. `arg` is the workspace index,
-/// window id or scroll distance for commands that take one, else ignored.
+/// Puts every window back in its place and syncs.
 ///
 /// # Safety
 /// `engine` must be a live pointer from `pwm_engine_new`, or null.
 #[no_mangle]
-pub unsafe extern "C" fn pwm_engine_command(engine: *mut Engine, command: u32, arg: f64) -> PwmStatus {
+pub unsafe extern "C" fn pwm_engine_retile(engine: *mut Engine) -> PwmStatus {
+    let Some(engine) = engine.as_mut() else {
+        return PwmStatus::NullPointer;
+    };
+    status(engine.retile())
+}
+
+/// Runs one of the `PWM_COMMAND_*` actions. `arg` is the workspace index,
+/// window id or scroll distance for commands that take one, else ignored.
+/// `changed`, if not null, is set to whether the command changed anything.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+/// `changed` must be valid for writes, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_command(
+    engine: *mut Engine,
+    command: u32,
+    arg: f64,
+    changed: *mut bool,
+) -> PwmStatus {
+    if let Some(changed) = changed.as_mut() {
+        *changed = false;
+    }
     let Some(engine) = engine.as_mut() else {
         return PwmStatus::NullPointer;
     };
     let Some(command) = Command::parse(command, arg) else {
         return PwmStatus::InvalidArgument;
     };
-    status(engine.command(command))
+    let result = engine.command(command);
+    if let (Ok(true), Some(changed)) = (&result, changed.as_mut()) {
+        *changed = true;
+    }
+    status(result)
 }
 
 /// Advances strip slides by `seconds` and moves the windows. Returns
 /// whether a strip is still sliding; call again on the next frame if so.
+/// `status`, if not null, receives the outcome; a strip whose windows could
+/// not be moved stops sliding.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+/// `status` must be valid for writes, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_tick(engine: *mut Engine, seconds: f64, status_out: *mut PwmStatus) -> bool {
+    let Some(engine) = engine.as_mut() else {
+        if let Some(out) = status_out.as_mut() {
+            *out = PwmStatus::NullPointer;
+        }
+        return false;
+    };
+    let result = engine.tick(seconds);
+    let sliding = *result.as_ref().unwrap_or(&false);
+    if let Some(out) = status_out.as_mut() {
+        *out = status(result);
+    }
+    sliding
+}
+
+/// Whether a strip is sliding, so `pwm_engine_tick` should be called on
+/// every frame.
 ///
 /// # Safety
 /// `engine` must be a live pointer from `pwm_engine_new`, or null.
 #[no_mangle]
-pub unsafe extern "C" fn pwm_engine_tick(engine: *mut Engine, seconds: f64) -> bool {
-    engine.as_mut().is_some_and(|engine| engine.tick(seconds).unwrap_or(false))
+pub unsafe extern "C" fn pwm_engine_is_animating(engine: *const Engine) -> bool {
+    engine.as_ref().is_some_and(Engine::is_animating)
 }
 
 /// Applies settings given as JSON (see `engine::Config`). Malformed JSON
@@ -331,10 +384,91 @@ mod tests {
     fn null_engine_is_reported() {
         unsafe {
             assert_eq!(pwm_engine_list_windows(ptr::null()).status, PwmStatus::NullPointer);
-            assert_eq!(pwm_engine_set_window_frame(ptr::null(), 1, Rect::default()), PwmStatus::NullPointer);
             assert_eq!(pwm_engine_sync(ptr::null_mut()), PwmStatus::NullPointer);
-            assert_eq!(pwm_engine_command(ptr::null_mut(), 0, 0.0), PwmStatus::NullPointer);
+            assert_eq!(pwm_engine_retile(ptr::null_mut()), PwmStatus::NullPointer);
+            assert_eq!(pwm_engine_command(ptr::null_mut(), 0, 0.0, ptr::null_mut()), PwmStatus::NullPointer);
+            let mut status = PwmStatus::Ok;
+            assert!(!pwm_engine_tick(ptr::null_mut(), 0.1, &mut status));
+            assert_eq!(status, PwmStatus::NullPointer);
+            assert!(!pwm_engine_is_animating(ptr::null()));
             pwm_engine_free(ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn last_error_describes_the_failure() {
+        let engine = Box::into_raw(Box::new(Engine::new(Box::new(MockBackend::untrusted()))));
+        unsafe {
+            let areas = [Rect::new(0.0, 0.0, 800.0, 600.0)];
+            pwm_engine_set_monitors(engine, areas.as_ptr(), 1);
+            assert_eq!(pwm_engine_sync(engine), PwmStatus::NotTrusted);
+            let message = CStr::from_ptr(pwm_last_error()).to_str().unwrap();
+            assert!(message.contains("Accessibility"), "{message}");
+            pwm_engine_free(engine);
+        }
+    }
+
+    /// The header is written by hand; this keeps its numbers in step with
+    /// the Rust side.
+    #[test]
+    fn header_matches_the_engine() {
+        let header = include_str!("../include/paperwm_engine.h");
+        let value = |name: &str| -> u32 {
+            let line = header.lines().map(str::trim).find_map(|l| {
+                l.strip_prefix(&format!("#define {name} ")).or_else(|| l.strip_prefix(&format!("{name} = ")))
+            });
+            let rest = line.unwrap_or_else(|| panic!("{name} missing from the header"));
+            let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+            digits.parse().unwrap_or_else(|_| panic!("no value for {name}"))
+        };
+        assert_eq!(value("PWM_WORKSPACE_COUNT") as usize, crate::engine::WORKSPACE_COUNT);
+        let commands = [
+            ("FOCUS_LEFT", Command::FocusLeft),
+            ("FOCUS_RIGHT", Command::FocusRight),
+            ("FOCUS_UP", Command::FocusUp),
+            ("FOCUS_DOWN", Command::FocusDown),
+            ("MOVE_LEFT", Command::MoveLeft),
+            ("MOVE_RIGHT", Command::MoveRight),
+            ("MOVE_UP", Command::MoveUp),
+            ("MOVE_DOWN", Command::MoveDown),
+            ("CYCLE_WIDTH", Command::CycleWidth),
+            ("TOGGLE_FULL_WIDTH", Command::ToggleFullWidth),
+            ("CENTER", Command::Center),
+            ("CONSUME", Command::Consume),
+            ("EXPEL", Command::Expel),
+            ("SWITCH_WORKSPACE", Command::SwitchWorkspace(1)),
+            ("MOVE_TO_WORKSPACE", Command::MoveToWorkspace(1)),
+            ("NEXT_WORKSPACE", Command::NextWorkspace),
+            ("PREVIOUS_WORKSPACE", Command::PreviousWorkspace),
+            ("MOVE_TO_NEXT_WORKSPACE", Command::MoveToNextWorkspace),
+            ("MOVE_TO_PREVIOUS_WORKSPACE", Command::MoveToPreviousWorkspace),
+            ("LAST_WORKSPACE", Command::LastWorkspace),
+            ("FOCUS_MONITOR_LEFT", Command::FocusMonitorLeft),
+            ("FOCUS_MONITOR_RIGHT", Command::FocusMonitorRight),
+            ("MOVE_TO_MONITOR_LEFT", Command::MoveToMonitorLeft),
+            ("MOVE_TO_MONITOR_RIGHT", Command::MoveToMonitorRight),
+            ("TOGGLE_SCRATCH", Command::ToggleScratch),
+            ("MOVE_TO_SCRATCH", Command::MoveToScratch),
+            ("FOCUS_WINDOW", Command::FocusWindow(1)),
+            ("SCROLL_BY", Command::ScrollBy(1.0)),
+            ("SCROLL_END", Command::ScrollEnd),
+            ("FOCUS_FIRST", Command::FocusFirst),
+            ("FOCUS_LAST", Command::FocusLast),
+        ];
+        for (name, command) in commands {
+            assert_eq!(Command::parse(value(&format!("PWM_COMMAND_{name}")), 1.0), Some(command), "{name}");
+        }
+        assert_eq!(Command::parse(commands.len() as u32, 1.0), None, "a command is missing from the header");
+        let statuses = [
+            ("OK", PwmStatus::Ok),
+            ("NOT_TRUSTED", PwmStatus::NotTrusted),
+            ("WINDOW_NOT_FOUND", PwmStatus::WindowNotFound),
+            ("PLATFORM_ERROR", PwmStatus::PlatformError),
+            ("NULL_POINTER", PwmStatus::NullPointer),
+            ("INVALID_ARGUMENT", PwmStatus::InvalidArgument),
+        ];
+        for (name, status) in statuses {
+            assert_eq!(value(&format!("PWM_STATUS_{name}")), status as u32, "{name}");
         }
     }
 
@@ -378,9 +512,14 @@ mod tests {
             assert_eq!(pwm_engine_set_monitors(engine, areas.as_ptr(), 1), PwmStatus::Ok);
             assert_eq!(pwm_engine_sync(engine), PwmStatus::Ok);
             assert_eq!((*engine).workspace(0).unwrap().focused_window(), Some(1));
-            assert_eq!(pwm_engine_command(engine, 0, 0.0), PwmStatus::Ok);
-            assert_eq!(pwm_engine_command(engine, 99, 0.0), PwmStatus::InvalidArgument);
-            assert_eq!(pwm_engine_set_window_frame(engine, 9, Rect::default()), PwmStatus::WindowNotFound);
+            let mut changed = true;
+            assert_eq!(pwm_engine_command(engine, 0, 0.0, &mut changed), PwmStatus::Ok);
+            assert!(!changed);
+            assert_eq!(pwm_engine_command(engine, 10, 0.0, &mut changed), PwmStatus::Ok);
+            assert!(changed);
+            assert_eq!(pwm_engine_command(engine, 99, 0.0, &mut changed), PwmStatus::InvalidArgument);
+            assert!(!changed);
+            assert_eq!(pwm_engine_retile(engine), PwmStatus::Ok);
             pwm_engine_free(engine);
         }
     }
