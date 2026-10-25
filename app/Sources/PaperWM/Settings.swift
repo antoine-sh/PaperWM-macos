@@ -24,6 +24,9 @@ final class Settings: ObservableObject {
         /// "#RRGGBB".
         var borderColor = "#3D8BFF"
         var borderWidth: Double = 4
+        /// Window corner radius used until a window's own is measured, or
+        /// when it can't be (no Screen Recording permission).
+        var cornerRadius: Double = ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 26 ? 16 : 10
         /// Dim every window except the focused one.
         var dimBackground = false
         /// Opacity of the dim, 0–1.
@@ -45,6 +48,7 @@ final class Settings: ObservableObject {
             focusBorder = try c.decodeIfPresent(Bool.self, forKey: .focusBorder) ?? defaults.focusBorder
             borderColor = try c.decodeIfPresent(String.self, forKey: .borderColor) ?? defaults.borderColor
             borderWidth = try c.decodeIfPresent(Double.self, forKey: .borderWidth) ?? defaults.borderWidth
+            cornerRadius = try c.decodeIfPresent(Double.self, forKey: .cornerRadius) ?? defaults.cornerRadius
             dimBackground = try c.decodeIfPresent(Bool.self, forKey: .dimBackground) ?? defaults.dimBackground
             dimAmount = try c.decodeIfPresent(Double.self, forKey: .dimAmount) ?? defaults.dimAmount
             minimapStyle = try c.decodeIfPresent(MinimapStyle.self, forKey: .minimapStyle) ?? defaults.minimapStyle
