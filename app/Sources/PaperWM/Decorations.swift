@@ -1,9 +1,10 @@
 import AppKit
 
 /// Highlights the focused window: a colored border around it and a dim over
-/// everything behind it. Both are click-through panels that follow the
-/// frontmost window through the window server, so they also track windows
-/// PaperWM doesn't tile and windows being dragged.
+/// everything behind it. Both are click-through panels drawn with layers, so
+/// moving them is left to the GPU. The engine says which window is focused;
+/// the window server says where it is, which also covers windows PaperWM
+/// doesn't tile and windows being dragged.
 @MainActor
 final class Decorations {
     private let border: NSPanel
@@ -12,10 +13,16 @@ final class Decorations {
     private var dims: [NSPanel] = []
     private var values = Settings.Values()
     private var timer: Timer?
-    private var focusedID: CGWindowID?
-    /// Measured corner radius of each window seen so far; nil while measuring
+    /// The window being decorated and the frame it was last shown at.
+    private var focused: (id: CGWindowID, frame: CGRect)?
+    /// The focused window the engine last reported.
+    private var engineFocus: CGWindowID?
+    /// Measured corner radius of recently seen windows; nil while measuring
     /// or when it couldn't be measured.
     private var radii: [CGWindowID: CGFloat?] = [:]
+    private static let ownPID = ProcessInfo.processInfo.processIdentifier
+
+    private var isActive: Bool { values.focusBorder || values.dimBackground }
 
     init() {
         border = Self.panel(level: .floating)
@@ -26,42 +33,67 @@ final class Decorations {
         self.values = values
         borderView.color = NSColor(hex: values.borderColor) ?? .controlAccentColor
         borderView.width = values.borderWidth
-        borderView.needsDisplay = true
-        focusedID = nil
-        let active = values.focusBorder || values.dimBackground
-        if active, timer == nil {
-            // Window moves aren't observed, so poll while anything is shown.
-            timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
-                MainActor.assumeIsolated { self?.refresh() }
+        if isActive, timer == nil {
+            // Window moves aren't observed, so follow the focused window
+            // while anything is shown; each tick looks up that one window.
+            let timer = Timer(timeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
+                MainActor.assumeIsolated { self?.track() }
             }
-        } else if !active {
+            RunLoop.main.add(timer, forMode: .common)
+            self.timer = timer
+        } else if !isActive {
             timer?.invalidate()
             timer = nil
         }
-        refresh()
+        focused = nil
+        refresh(focus: engineFocus)
     }
 
-    func refresh() {
-        let focused = Self.focusedWindow()
-        let changed = focused?.id != focusedID
-        focusedID = focused?.id
-        let frame = focused.map { Self.cocoaRect($0.frame) }
-        let radius = focused.map { self.radius(of: $0.id) } ?? 0
+    /// Finds the focused window again, after focus may have changed.
+    /// `focus` is the engine's focused window, if it knows one.
+    func refresh(focus: CGWindowID?) {
+        engineFocus = focus
+        guard isActive else {
+            hide()
+            return
+        }
+        let window = focus.flatMap(Self.window) ?? Self.frontWindow()
+        show(window, raised: window?.id != focused?.id)
+    }
 
-        if values.focusBorder, let frame {
+    /// Follows the focused window when it moves, e.g. during a slide or a drag.
+    func track() {
+        guard isActive, let id = focused?.id else { return }
+        let window = Self.window(id)
+        if window?.frame != focused?.frame { show(window, raised: false) }
+    }
+
+    private func hide() {
+        focused = nil
+        border.orderOut(nil)
+        dims.forEach { $0.orderOut(nil) }
+    }
+
+    private func show(_ window: (id: CGWindowID, frame: CGRect)?, raised: Bool) {
+        guard let window else {
+            hide()
+            return
+        }
+        focused = window
+        let frame = window.frame.flippedForScreens
+        let radius = radius(of: window.id)
+
+        if values.focusBorder {
             let width = values.borderWidth
-            if borderView.radius != radius {
-                borderView.radius = radius
-                borderView.needsDisplay = true
-            }
-            border.setFrame(frame.insetBy(dx: -width, dy: -width), display: true)
-            border.orderFrontRegardless()
+            borderView.radius = radius
+            border.setFrame(frame.insetBy(dx: -width, dy: -width), display: false)
+            if raised || !border.isVisible { border.orderFrontRegardless() }
         } else {
             border.orderOut(nil)
         }
 
         let screens = NSScreen.screens
-        guard values.dimBackground, let focused, let frame else {
+        guard values.dimBackground else {
             dims.forEach { $0.orderOut(nil) }
             return
         }
@@ -79,14 +111,9 @@ final class Decorations {
             if panel.frame != screen { panel.setFrame(screen, display: false) }
             // The hole keeps the focused window clear even if macOS refuses to
             // order the dim below another app's window.
-            let hole = frame.offsetBy(dx: -screen.minX, dy: -screen.minY)
-            if view.hole != hole || view.amount != values.dimAmount || view.radius != radius {
-                view.hole = hole
-                view.amount = values.dimAmount
-                view.radius = radius
-                view.needsDisplay = true
-            }
-            if changed || !panel.isVisible { panel.order(.below, relativeTo: Int(focused.id)) }
+            view.update(hole: frame.offsetBy(dx: -screen.minX, dy: -screen.minY), radius: radius,
+                        amount: values.dimAmount)
+            if raised || !panel.isVisible { panel.order(.below, relativeTo: Int(window.id)) }
         }
     }
 
@@ -95,19 +122,35 @@ final class Decorations {
         if let measured = radii[id] {
             return measured ?? CGFloat(values.cornerRadius)
         }
+        // Window ids aren't reused for a long time; forgetting old ones now
+        // and then keeps this small.
+        if radii.count > 256 { radii.removeAll() }
         radii[id] = .some(nil)
         Task { [weak self] in
             let measured = await WindowCorners.radius(of: id)
-            self?.radii[id] = .some(measured)
-            if measured != nil { self?.refresh() }
+            guard let self else { return }
+            self.radii[id] = .some(measured)
+            if measured != nil, self.focused?.id == id { self.show(self.focused, raised: false) }
         }
         return CGFloat(values.cornerRadius)
     }
 
-    /// The front window of the frontmost app, in Accessibility coordinates.
-    private static func focusedWindow() -> (id: CGWindowID, frame: CGRect)? {
-        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier,
-              pid != ProcessInfo.processInfo.processIdentifier,
+    /// Where window `id` is, in Accessibility coordinates, if it is another
+    /// app's window on screen.
+    private static func window(_ id: CGWindowID) -> (id: CGWindowID, frame: CGRect)? {
+        guard let list = CGWindowListCopyWindowInfo([.optionIncludingWindow], id) as? [[String: Any]],
+              let info = list.first,
+              info[kCGWindowOwnerPID as String] as? pid_t != ownPID,
+              info[kCGWindowIsOnscreen as String] as? Bool ?? false,
+              let bounds = info[kCGWindowBounds as String] as? NSDictionary,
+              let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { return nil }
+        return (id, frame)
+    }
+
+    /// The front window of the frontmost app, for when the engine doesn't
+    /// know the focused window.
+    private static func frontWindow() -> (id: CGWindowID, frame: CGRect)? {
+        guard let pid = NSWorkspace.shared.frontmostApplication?.processIdentifier, pid != ownPID,
               let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
                 as? [[String: Any]] else { return nil }
         // Front to back; skip the app's invisible and tiny helper windows.
@@ -124,11 +167,6 @@ final class Decorations {
         return nil
     }
 
-    private static func cocoaRect(_ rect: CGRect) -> CGRect {
-        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
-        return CGRect(x: rect.minX, y: primaryHeight - rect.maxY, width: rect.width, height: rect.height)
-    }
-
     private static func panel(level: NSWindow.Level) -> NSPanel {
         let panel = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered,
                             defer: true)
@@ -142,36 +180,79 @@ final class Decorations {
     }
 }
 
+/// A rounded ring drawn by a layer, so resizing it redraws nothing.
 private final class BorderView: NSView {
-    var color: NSColor = .controlAccentColor
-    var width: CGFloat = 4
-    /// The window's corner radius; the ring's outer edge is rounder by `width`.
-    var radius: CGFloat = 10
+    private let ring = CALayer()
 
-    override func draw(_ dirtyRect: NSRect) {
-        let inset = width / 2
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: inset, dy: inset),
-                                xRadius: radius + inset, yRadius: radius + inset)
-        path.lineWidth = width
-        color.setStroke()
-        path.stroke()
+    var color: NSColor = .controlAccentColor {
+        didSet { withoutAnimation { ring.borderColor = color.cgColor } }
+    }
+    var width: CGFloat = 4 {
+        didSet { withoutAnimation { ring.borderWidth = width; ring.cornerRadius = radius + width } }
+    }
+    /// The window's corner radius; the ring's outer edge is rounder by `width`.
+    var radius: CGFloat = 10 {
+        didSet { if radius != oldValue { withoutAnimation { ring.cornerRadius = radius + width } } }
+    }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        ring.borderColor = color.cgColor
+        ring.borderWidth = width
+        ring.cornerRadius = radius + width
+        layer?.addSublayer(ring)
+    }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func layout() {
+        super.layout()
+        withoutAnimation { ring.frame = bounds }
     }
 }
 
+/// A translucent black cover with a rounded hole, drawn by a shape layer.
 private final class DimView: NSView {
-    var amount: Double = 0.3
-    var hole: CGRect?
-    var radius: CGFloat = 10
+    private let shape = CAShapeLayer()
+    private var hole: CGRect?
+    private var radius: CGFloat = 0
 
-    override func draw(_ dirtyRect: NSRect) {
-        let path = NSBezierPath(rect: bounds)
-        if let hole {
-            path.append(NSBezierPath(roundedRect: hole, xRadius: radius, yRadius: radius))
-            path.windingRule = .evenOdd
-        }
-        NSColor.black.withAlphaComponent(amount).setFill()
-        path.fill()
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        shape.fillRule = .evenOdd
+        layer?.addSublayer(shape)
     }
+
+    required init?(coder: NSCoder) { fatalError("not used") }
+
+    func update(hole: CGRect, radius: CGFloat, amount: Double) {
+        let color = NSColor.black.withAlphaComponent(amount).cgColor
+        guard hole != self.hole || radius != self.radius || shape.fillColor != color || shape.frame != bounds else {
+            return
+        }
+        self.hole = hole
+        self.radius = radius
+        withoutAnimation {
+            shape.frame = bounds
+            shape.fillColor = color
+            let path = CGMutablePath()
+            path.addRect(bounds)
+            let corner = min(radius, hole.width / 2, hole.height / 2)
+            path.addRoundedRect(in: hole, cornerWidth: max(corner, 0), cornerHeight: max(corner, 0))
+            shape.path = path
+        }
+    }
+}
+
+/// Applies layer changes at once instead of with Core Animation's implicit
+/// quarter-second animation.
+private func withoutAnimation(_ changes: () -> Void) {
+    CATransaction.begin()
+    CATransaction.setDisableActions(true)
+    changes()
+    CATransaction.commit()
 }
 
 extension NSColor {

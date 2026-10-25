@@ -12,6 +12,9 @@
 extern "C" {
 #endif
 
+// Number of workspaces; workspace indices run from 0 to PWM_WORKSPACE_COUNT - 1.
+#define PWM_WORKSPACE_COUNT 9
+
 typedef enum {
     PWM_STATUS_OK = 0,
     PWM_STATUS_NOT_TRUSTED = 1,
@@ -94,7 +97,9 @@ void pwm_engine_free(PwmEngine *engine);
 PwmWindowList pwm_engine_list_windows(const PwmEngine *engine);
 void pwm_window_list_free(PwmWindowList list);
 
-PwmStatus pwm_engine_set_window_frame(const PwmEngine *engine, uint32_t id, PwmRect frame);
+// What went wrong in the latest call that failed, for logs. Valid until the
+// next failing call.
+const char *pwm_last_error(void);
 
 // Usable area of each monitor (Accessibility coordinates), main one first.
 PwmStatus pwm_engine_set_monitors(PwmEngine *engine, const PwmRect *areas, size_t count);
@@ -102,12 +107,20 @@ PwmStatus pwm_engine_set_monitors(PwmEngine *engine, const PwmRect *areas, size_
 // Brings the layout up to date with the current windows and focus.
 PwmStatus pwm_engine_sync(PwmEngine *engine);
 
+// Puts every window back in its place and syncs.
+PwmStatus pwm_engine_retile(PwmEngine *engine);
+
 // `command` is a PwmCommand value; `arg` is ignored by commands without one.
-PwmStatus pwm_engine_command(PwmEngine *engine, uint32_t command, double arg);
+// `changed`, if not null, is set to whether the command changed anything.
+PwmStatus pwm_engine_command(PwmEngine *engine, uint32_t command, double arg, bool *changed);
 
 // Advances strip slides by `seconds` and moves the windows. Returns whether a
-// strip is still sliding; call again on the next frame if so.
-bool pwm_engine_tick(PwmEngine *engine, double seconds);
+// strip is still sliding; call again on the next frame if so. `status`, if not
+// null, receives the outcome.
+bool pwm_engine_tick(PwmEngine *engine, double seconds, PwmStatus *status);
+
+// Whether a strip is sliding, so pwm_engine_tick should run every frame.
+bool pwm_engine_is_animating(const PwmEngine *engine);
 
 // Settings as JSON: {"gap": 8, "width_presets": [0.33, 0.5], "workspace_names": ["1", ...],
 // "animation_duration": 0.25}.

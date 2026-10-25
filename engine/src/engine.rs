@@ -5,6 +5,8 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::animator::Animator;
+use crate::applier::FrameApplier;
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
 use crate::geometry::Rect;
 use crate::placement;
@@ -154,12 +156,17 @@ pub struct State {
     pub mru: Vec<WindowId>,
     pub scratch: Vec<WindowId>,
     pub scratch_visible: bool,
+    /// The window with keyboard focus, managed or not, as far as the engine
+    /// knows: what macOS last reported, or what the engine just focused.
+    pub focused_window: Option<WindowId>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct MonitorState {
     pub area: Rect,
     pub workspace: usize,
+    /// Width of the strip's viewport: the area without the outer gaps.
+    pub viewport: f64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -172,6 +179,8 @@ pub struct WorkspaceState {
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ColumnState {
+    /// Strip x of the column's left edge.
+    pub x: f64,
     pub width: f64,
     pub windows: Vec<WindowId>,
     pub focused_row: usize,
@@ -183,6 +192,8 @@ pub struct WindowState {
     pub pid: i32,
     pub app_name: String,
     pub title: String,
+    /// Where the engine put the window, or where it was last seen.
+    pub frame: Rect,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -212,31 +223,13 @@ pub struct Engine {
     /// applies focus changes asynchronously, so until the reported focus
     /// differs from this, it is old news and must not be followed.
     stale_focus: Option<WindowId>,
-    /// Last frame set on each window, to skip redundant Accessibility calls.
-    applied: HashMap<WindowId, Rect>,
+    /// The focused window for the UI; see `State::focused_window`.
+    system_focus: Option<WindowId>,
+    applier: FrameApplier,
     /// What the last sync saw of each managed window, for the UI.
     info: HashMap<WindowId, WindowInfo>,
     /// The scroll on screen for each workspace, sliding toward its target.
-    slides: Vec<Slide>,
-}
-
-/// A strip sliding from one scroll position to another.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-struct Slide {
-    from: f64,
-    to: f64,
-    shown: f64,
-    elapsed: f64,
-}
-
-impl Slide {
-    fn at(scroll: f64) -> Self {
-        Self { from: scroll, to: scroll, shown: scroll, elapsed: 0.0 }
-    }
-
-    fn is_moving(&self) -> bool {
-        self.shown != self.to
-    }
+    animator: Animator,
 }
 
 impl Engine {
@@ -252,9 +245,10 @@ impl Engine {
             scratch_visible: true,
             mru: Vec::new(),
             stale_focus: None,
-            applied: HashMap::new(),
+            system_focus: None,
+            applier: FrameApplier::default(),
             info: HashMap::new(),
-            slides: vec![Slide::default(); WORKSPACE_COUNT],
+            animator: Animator::new(WORKSPACE_COUNT),
         }
     }
 
@@ -275,13 +269,22 @@ impl Engine {
         &self.config
     }
 
-    /// Replaces the settings and lays everything out again.
+    /// Replaces the settings, laying windows out again only when a setting
+    /// that affects the layout changed.
     pub fn set_config(&mut self, config: Config) -> Result<()> {
+        let relayout = config.gap != self.config.gap;
+        let resnap = relayout || config.animation_duration != self.config.animation_duration;
         self.config = config;
-        self.applied.clear();
-        self.ensure_visible_all();
-        self.snap_all();
-        self.apply()
+        if relayout {
+            self.ensure_visible_all();
+        }
+        if resnap {
+            self.snap_all();
+        }
+        if relayout {
+            self.apply()?;
+        }
+        Ok(())
     }
 
     pub fn workspace(&self, index: usize) -> Option<&Workspace> {
@@ -300,7 +303,9 @@ impl Engine {
                 columns: ws
                     .columns()
                     .iter()
-                    .map(|c| ColumnState {
+                    .zip(ws.column_xs(self.config.gap))
+                    .map(|(c, x)| ColumnState {
+                        x,
                         width: c.width(),
                         windows: c.windows().to_vec(),
                         focused_row: c.focused_row(),
@@ -314,20 +319,33 @@ impl Engine {
             .flat_map(Workspace::windows)
             .chain(self.scratch.iter().map(|&(id, _)| id))
             .filter_map(|id| self.info.get(&id))
-            .map(|w| WindowState { id: w.id, pid: w.pid, app_name: w.app_name.clone(), title: w.title.clone() })
+            .map(|w| WindowState {
+                id: w.id,
+                pid: w.pid,
+                app_name: w.app_name.clone(),
+                title: w.title.clone(),
+                frame: self.applier.get(w.id).unwrap_or(w.frame),
+            })
             .collect();
         // Windows never focused yet follow the ones that were, in layout order.
+        let focused: HashSet<WindowId> = self.mru.iter().copied().collect();
         let mut mru = self.mru.clone();
-        mru.extend(windows.iter().map(|w| w.id).filter(|id| !self.mru.contains(id)));
+        mru.extend(windows.iter().map(|w| w.id).filter(|id| !focused.contains(id)));
         State {
             active_monitor: self.active,
             gap: self.config.gap,
-            monitors: self.monitors.iter().map(|m| MonitorState { area: m.area, workspace: m.workspace }).collect(),
+            monitors: self
+                .monitors
+                .iter()
+                .enumerate()
+                .map(|(i, m)| MonitorState { area: m.area, workspace: m.workspace, viewport: self.viewport(i) })
+                .collect(),
             workspaces,
             windows,
             mru,
             scratch: self.scratch.iter().map(|&(id, _)| id).collect(),
             scratch_visible: self.scratch_visible,
+            focused_window: self.system_focus,
         }
     }
 
@@ -350,48 +368,71 @@ impl Engine {
         }
         self.monitors = monitors;
         self.active = self.active.min(self.monitors.len() - 1);
-        self.applied.clear();
+        // macOS moves windows itself when displays change.
+        self.applier.clear();
         self.ensure_visible_all();
         self.snap_all();
         self.apply()
     }
 
     /// Reconciles the layout with the windows that exist now: adds new ones
-    /// next to the focused column, drops closed or minimized ones, and
-    /// follows the system's keyboard focus, bringing in its workspace.
+    /// next to the focused column, drops closed or minimized ones, puts back
+    /// tiled windows that were moved, and follows the system's keyboard
+    /// focus, bringing in its workspace. Windows of apps that are not
+    /// responding are kept as they were.
     pub fn sync(&mut self) -> Result<()> {
         if self.monitors.is_empty() {
             return Ok(());
         }
-        let windows = self.backend.windows()?;
-        let tileable: HashMap<WindowId, &WindowInfo> =
-            windows.iter().filter(|w| w.is_tileable()).map(|w| (w.id, w)).collect();
-        self.info = tileable.iter().map(|(&id, &w)| (id, w.clone())).collect();
+        let mut current: HashMap<WindowId, WindowInfo> =
+            self.backend.windows()?.into_iter().filter(WindowInfo::is_tileable).map(|w| (w.id, w)).collect();
+        // Windows whose frame was just read, as opposed to kept from before.
+        let fresh: HashSet<WindowId> = current.keys().copied().collect();
+        let busy = self.backend.unresponsive_apps();
+        if !busy.is_empty() {
+            for (&id, info) in &self.info {
+                if busy.contains(&info.pid) {
+                    current.entry(id).or_insert_with(|| info.clone());
+                }
+            }
+        }
+        self.info = current;
 
-        self.scratch.retain(|(id, _)| tileable.contains_key(id));
-        self.mru.retain(|id| tileable.contains_key(id));
+        self.scratch.retain(|(id, _)| self.info.contains_key(id));
+        self.mru.retain(|id| self.info.contains_key(id));
         if self.scratch_visible {
             // Keep wherever the user dragged them.
             for (id, frame) in &mut self.scratch {
-                *frame = tileable[id].frame;
+                *frame = self.info[id].frame;
             }
         }
         let mut managed: HashSet<WindowId> = self.scratch.iter().map(|&(id, _)| id).collect();
         for workspace in &mut self.workspaces {
-            let gone: Vec<WindowId> = workspace.windows().filter(|id| !tileable.contains_key(id)).collect();
+            let gone: Vec<WindowId> = workspace.windows().filter(|id| !self.info.contains_key(id)).collect();
             for id in gone {
                 workspace.remove_window(id);
-                self.applied.remove(&id);
+                self.applier.forget(id);
             }
             managed.extend(workspace.windows());
         }
 
-        let mut new: Vec<&WindowInfo> = tileable.values().copied().filter(|w| !managed.contains(&w.id)).collect();
-        new.sort_by(|a, b| a.frame.x.total_cmp(&b.frame.x).then(a.id.cmp(&b.id)));
-        for window in new {
-            let monitor = self.monitor_at(window.frame).unwrap_or(self.active);
+        let mut new: Vec<(WindowId, Rect)> =
+            self.info.values().filter(|w| !managed.contains(&w.id)).map(|w| (w.id, w.frame)).collect();
+        new.sort_by(|a, b| a.1.x.total_cmp(&b.1.x).then(a.0.cmp(&b.0)));
+        for (id, frame) in new {
+            let monitor = self.monitor_at(frame).unwrap_or(self.active);
             let viewport = self.viewport(monitor);
-            self.workspaces[self.monitors[monitor].workspace].insert_window(window.id, window.frame.width, viewport);
+            self.workspaces[self.monitors[monitor].workspace].insert_window(id, frame.width, viewport);
+        }
+
+        // Tiled windows on screen that the user or their app moved.
+        for monitor in &self.monitors {
+            if self.animator.is_moving(monitor.workspace) {
+                continue;
+            }
+            for id in self.workspaces[monitor.workspace].windows().filter(|id| fresh.contains(id)) {
+                self.applier.observe(id, self.info[&id].frame);
+            }
         }
 
         let focused = self.backend.focused_window();
@@ -399,6 +440,7 @@ impl Engine {
             // Our own focus request has not landed yet.
         } else {
             self.stale_focus = None;
+            self.system_focus = focused;
             if let Some(id) = focused {
                 self.follow_focus(id);
                 self.touch(id);
@@ -407,6 +449,13 @@ impl Engine {
 
         self.ensure_visible_all();
         self.apply()
+    }
+
+    /// Puts every window back in its place, including ones that seemed to
+    /// refuse it, and syncs.
+    pub fn retile(&mut self) -> Result<()> {
+        self.applier.clear();
+        self.sync()
     }
 
     /// Runs a keyboard command on the active monitor. Returns whether it
@@ -457,7 +506,7 @@ impl Engine {
             Command::FocusWindow(id) => self.focus_window(id, &mut raise),
             Command::ScrollBy(dx) => {
                 // Pan from what is on screen, even mid-slide.
-                ws.scroll_by(dx + self.slides[current].shown - ws.scroll(), viewport, gap);
+                ws.scroll_by(dx + self.animator.shown(current) - ws.scroll(), viewport, gap);
                 true
             }
             Command::ScrollEnd => {
@@ -472,7 +521,7 @@ impl Engine {
         }
         if matches!(command, Command::ScrollBy(_)) {
             // The strip follows the fingers directly.
-            self.slides[current] = Slide::at(self.workspaces[current].scroll());
+            self.animator.snap(current, self.workspaces[current].scroll());
         }
 
         self.apply()?;
@@ -494,29 +543,19 @@ impl Engine {
     /// Advances strip slides by `seconds` and moves the windows. Returns
     /// whether any strip is still sliding.
     pub fn tick(&mut self, seconds: f64) -> Result<bool> {
-        let duration = self.config.animation_duration;
-        let mut moved = false;
-        for slide in self.slides.iter_mut().filter(|s| s.is_moving()) {
-            slide.elapsed += seconds;
-            let t = if duration > 0.0 { (slide.elapsed / duration).min(1.0) } else { 1.0 };
-            // Ease out: start fast, settle gently.
-            let eased = 1.0 - (1.0 - t).powi(3);
-            slide.shown = if t >= 1.0 { slide.to } else { slide.from + (slide.to - slide.from) * eased };
-            moved = true;
-        }
-        if moved {
-            self.apply()?;
+        if self.animator.advance(seconds, self.config.animation_duration) {
+            self.write_frames()?;
         }
         Ok(self.is_animating())
     }
 
     pub fn is_animating(&self) -> bool {
-        self.slides.iter().any(Slide::is_moving)
+        self.animator.is_animating()
     }
 
     fn snap_all(&mut self) {
-        for (slide, ws) in self.slides.iter_mut().zip(&self.workspaces) {
-            *slide = Slide::at(ws.scroll());
+        for (index, ws) in self.workspaces.iter().enumerate() {
+            self.animator.snap(index, ws.scroll());
         }
     }
 
@@ -542,6 +581,7 @@ impl Engine {
         match self.backend.focus(id) {
             Ok(()) => {
                 self.stale_focus = previous.filter(|&p| p != id);
+                self.system_focus = Some(id);
                 self.touch(id);
                 Ok(())
             }
@@ -645,7 +685,7 @@ impl Engine {
         }
         let Some(id) = self.focused_window() else { return false };
         self.workspaces[current].remove_window(id);
-        let size = self.applied.get(&id).or(self.info.get(&id).map(|w| &w.frame)).copied().unwrap_or_default();
+        let size = self.last_frame(id);
         let area = self.monitors[self.active].area;
         let frame = Rect::new(
             area.x + (area.width - size.width) / 2.0,
@@ -705,23 +745,35 @@ impl Engine {
         }
     }
 
-    /// Moves every managed window to its place: shown workspaces in their
-    /// strips, everything else into the hiding corner.
+    /// Where `id` was put last, or where it was last seen.
+    fn last_frame(&self, id: WindowId) -> Rect {
+        self.applier.get(id).or(self.info.get(&id).map(|w| w.frame)).unwrap_or_default()
+    }
+
+    /// Points each shown strip's slide at its workspace's scroll, then moves
+    /// every window into place.
     fn apply(&mut self) -> Result<()> {
-        for (index, (slide, ws)) in self.slides.iter_mut().zip(&self.workspaces).enumerate() {
-            let shown = self.monitors.iter().any(|m| m.workspace == index);
-            if !shown || self.config.animation_duration <= 0.0 {
-                *slide = Slide::at(ws.scroll());
-            } else if slide.to != ws.scroll() {
-                *slide = Slide { from: slide.shown, to: ws.scroll(), shown: slide.shown, elapsed: 0.0 };
+        let animate = self.config.animation_duration > 0.0;
+        for (index, ws) in self.workspaces.iter().enumerate() {
+            if animate && self.monitors.iter().any(|m| m.workspace == index) {
+                self.animator.retarget(index, ws.scroll());
+            } else {
+                self.animator.snap(index, ws.scroll());
             }
         }
+        self.write_frames()
+    }
+
+    /// Moves every managed window to its place: shown workspaces in their
+    /// strips as they are on screen now, everything else into the hiding
+    /// corner.
+    fn write_frames(&mut self) -> Result<()> {
         let areas: Vec<Rect> = self.monitors.iter().map(|m| m.area).collect();
         let mut frames = Vec::new();
         for (i, monitor) in self.monitors.iter().enumerate() {
             let others: Vec<Rect> = areas.iter().enumerate().filter(|&(j, _)| j != i).map(|(_, &a)| a).collect();
             let workspace = &self.workspaces[monitor.workspace];
-            let scroll = self.slides[monitor.workspace].shown;
+            let scroll = self.animator.shown(monitor.workspace);
             frames.extend(placement::frames(workspace, scroll, monitor.area, self.config.gap, &others));
         }
         for (index, workspace) in self.workspaces.iter().enumerate() {
@@ -729,45 +781,14 @@ impl Engine {
                 continue;
             }
             for id in workspace.windows() {
-                let frame = self.applied.get(&id).or(self.info.get(&id).map(|w| &w.frame)).copied().unwrap_or_default();
-                frames.push((id, placement::hidden_frame(frame, &areas)));
+                frames.push((id, placement::hidden_frame(self.last_frame(id), &areas)));
             }
         }
         for &(id, frame) in &self.scratch {
             frames.push((id, if self.scratch_visible { frame } else { placement::hidden_frame(frame, &areas) }));
         }
-        for (id, frame) in frames {
-            let previous = self.applied.get(&id).copied();
-            if previous.is_some_and(|f| approx_eq(f, frame)) {
-                continue;
-            }
-            // Sliding only moves windows; skipping the resize halves the
-            // Accessibility calls per frame.
-            let same_size = previous.is_some_and(|f| approx_eq(f, Rect { x: f.x, y: f.y, ..frame }));
-            let result = if same_size {
-                self.backend.set_position(id, frame.x, frame.y)
-            } else {
-                self.backend.set_frame(id, frame)
-            };
-            match result {
-                Ok(()) => {
-                    self.applied.insert(id, frame);
-                }
-                Err(BackendError::NotTrusted) => return Err(BackendError::NotTrusted),
-                // Closed windows are dropped on the next sync; windows
-                // that refuse a size keep their own.
-                Err(_) => {}
-            }
-        }
-        Ok(())
+        self.applier.write(self.backend.as_ref(), frames)
     }
-}
-
-fn approx_eq(a: Rect, b: Rect) -> bool {
-    (a.x - b.x).abs() < 0.5
-        && (a.y - b.y).abs() < 0.5
-        && (a.width - b.width).abs() < 0.5
-        && (a.height - b.height).abs() < 0.5
 }
 
 #[cfg(test)]
@@ -791,6 +812,12 @@ mod tests {
         }
         fn set_position(&self, id: WindowId, x: f64, y: f64) -> Result<()> {
             self.0.set_position(id, x, y)
+        }
+        fn set_size(&self, id: WindowId, width: f64, height: f64) -> Result<()> {
+            self.0.set_size(id, width, height)
+        }
+        fn unresponsive_apps(&self) -> Vec<i32> {
+            self.0.unresponsive_apps()
         }
         fn focused_window(&self) -> Option<WindowId> {
             self.0.focused_window()
@@ -1315,7 +1342,17 @@ mod tests {
         assert_eq!(state.windows.iter().map(|w| w.id).collect::<Vec<_>>(), vec![1, 2]);
         assert_eq!(state.windows[0].app_name, "App 1");
         let json = serde_json::to_value(&state).unwrap();
-        for key in ["active_monitor", "gap", "monitors", "workspaces", "windows", "mru", "scratch", "scratch_visible"] {
+        for key in [
+            "active_monitor",
+            "gap",
+            "monitors",
+            "workspaces",
+            "windows",
+            "mru",
+            "scratch",
+            "scratch_visible",
+            "focused_window",
+        ] {
             assert!(json.get(key).is_some(), "missing {key}");
         }
     }
@@ -1362,6 +1399,94 @@ mod tests {
         assert_eq!(backend.frame_of(1).unwrap().x, 8.0 - 102.0);
         engine.tick(1.0).unwrap();
         assert_eq!(backend.frame_of(3).unwrap().x, 1216.0 + 8.0 - 816.0);
+    }
+
+    #[test]
+    fn dragged_tiled_window_is_put_back_on_sync() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        let placed = backend.frame_of(2).unwrap();
+        backend.update(2, |w| w.frame = Rect::new(600.0, 200.0, 350.0, 250.0));
+        engine.sync().unwrap();
+        assert_eq!(backend.frame_of(2), Some(placed));
+    }
+
+    #[test]
+    fn window_refusing_its_size_is_not_fought_every_sync() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.sync().unwrap();
+        let refused = Rect { width: 500.0, ..backend.frame_of(1).unwrap() };
+        backend.update(1, |w| w.frame = refused);
+        engine.sync().unwrap();
+        // The app clamps to its minimum width again.
+        backend.update(1, |w| w.frame = refused);
+        engine.sync().unwrap();
+        let calls = backend.set_frame_calls();
+        engine.sync().unwrap();
+        assert_eq!(backend.set_frame_calls(), calls);
+
+        engine.retile().unwrap();
+        assert_eq!(backend.set_frame_calls(), calls + 1);
+    }
+
+    #[test]
+    fn busy_app_keeps_its_windows_in_place() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0), window(3, 200.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::FocusFirst).unwrap();
+        let before = columns(&engine);
+        // Window 2's app stops answering.
+        backend.set_unresponsive(vec![102]);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), before);
+        assert!(engine.state().windows.iter().any(|w| w.id == 2));
+
+        backend.set_unresponsive(vec![]);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), before);
+    }
+
+    #[test]
+    fn renaming_a_workspace_moves_no_windows() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        let calls = backend.set_frame_calls();
+        let mut config = engine.config().clone();
+        config.workspace_names[0] = "Mail".into();
+        engine.set_config(config).unwrap();
+        assert_eq!(backend.set_frame_calls(), calls);
+        assert_eq!(engine.state().workspaces[0].name, "Mail");
+    }
+
+    #[test]
+    fn centred_column_stays_centred_after_sync() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        engine.command(Command::Center).unwrap();
+        let centred = backend.frame_of(1).unwrap();
+        assert!(centred.x > 8.0);
+        engine.sync().unwrap();
+        assert_eq!(backend.frame_of(1), Some(centred));
+    }
+
+    #[test]
+    fn state_reports_focus_frames_and_column_positions() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        let state = engine.state();
+        assert_eq!(state.focused_window, Some(1));
+        assert_eq!(state.monitors[0].viewport, 1000.0);
+        let xs: Vec<f64> = state.workspaces[0].columns.iter().map(|c| c.x).collect();
+        assert_eq!(xs, vec![0.0, 308.0]);
+        assert_eq!(state.windows[0].frame, backend.frame_of(1).unwrap());
+
+        engine.command(Command::FocusRight).unwrap();
+        assert_eq!(engine.state().focused_window, Some(2));
     }
 
     #[test]
