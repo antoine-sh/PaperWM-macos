@@ -71,7 +71,9 @@ final class WindowManager {
             report { try engine.run(command, arg: arg) }
             // Redrawing the minimap for every scroll event is too costly; it
             // shows when the pan ends.
-            if let state = publish(), command != PWM_COMMAND_SCROLL_BY { minimap.show(state) }
+            if let state = publish(), command != PWM_COMMAND_SCROLL_BY {
+                minimap.show(state, style: settings.values.minimapStyle)
+            }
         case .switcher(let forward):
             guard let state = engine.state() else { return }
             minimap.hide()
