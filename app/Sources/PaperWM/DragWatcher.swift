@@ -6,8 +6,15 @@ import AppKit
 final class DragWatcher {
     private let onDrop: (CGPoint) -> Void
     private var monitor: Any?
+    /// Whether the left button moved since it went down.
+    private var dragged = false
+
     /// Whether the left button is down and has moved since it went down.
-    private(set) var isDragging = false
+    /// Checks the button too, in case the release never reached us (the
+    /// screen locked mid-drag, say), so syncs are not held back for good.
+    var isDragging: Bool {
+        dragged && NSEvent.pressedMouseButtons & 1 != 0
+    }
 
     init(onDrop: @escaping (CGPoint) -> Void) {
         self.onDrop = onDrop
@@ -23,13 +30,14 @@ final class DragWatcher {
 
     private func handle(_ event: NSEvent) {
         if event.type == .leftMouseDragged {
-            isDragging = true
+            dragged = true
             return
         }
-        guard isDragging else { return }
-        isDragging = false
+        guard dragged else { return }
+        dragged = false
+        // Where the button was released, not where the pointer is now.
         // CGEvent locations are in Accessibility coordinates already.
-        guard let location = CGEvent(source: nil)?.location else { return }
+        guard let location = event.cgEvent?.location else { return }
         onDrop(location)
     }
 }
