@@ -57,12 +57,21 @@ enum AppIcons {
         return icon
     }
 
-    /// The icon of an app that may not be running.
-    static func icon(bundleID: String?, name: String) -> NSImage? {
+    private static var smallIcons: [String: NSImage] = [:]
+
+    /// A small icon of an app that may not be running, looked up once.
+    static func small(bundleID: String?, name: String) -> NSImage {
+        let key = bundleID ?? name
+        if let icon = smallIcons[key] { return icon }
+        var icon: NSImage?
         if let bundleID, let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) {
-            return NSWorkspace.shared.icon(forFile: url.path)
+            icon = NSWorkspace.shared.icon(forFile: url.path)
+        } else {
+            icon = NSWorkspace.shared.runningApplications.first { $0.localizedName == name }?.icon
         }
-        return NSWorkspace.shared.runningApplications.first { $0.localizedName == name }?.icon
+        let image = small(icon)
+        smallIcons[key] = image
+        return image
     }
 
     /// A 16 pt copy of `icon`, or the generic app icon, for lists and menus.
