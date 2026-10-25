@@ -3,11 +3,11 @@
 //!
 //! All functions must be called from the main thread.
 
-use std::ffi::{c_char, c_void, CString};
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::ptr;
 
 use crate::backend::{BackendError, WindowInfo};
-use crate::engine::{Command, Engine};
+use crate::engine::{Command, Config, Engine};
 use crate::geometry::Rect;
 
 #[repr(C)]
@@ -189,19 +189,62 @@ pub unsafe extern "C" fn pwm_engine_sync(engine: *mut Engine) -> PwmStatus {
     status(engine.sync())
 }
 
-/// Runs one of the `PWM_COMMAND_*` actions.
+/// Runs one of the `PWM_COMMAND_*` actions. `arg` is the workspace index,
+/// window id or scroll distance for commands that take one, else ignored.
 ///
 /// # Safety
 /// `engine` must be a live pointer from `pwm_engine_new`, or null.
 #[no_mangle]
-pub unsafe extern "C" fn pwm_engine_command(engine: *mut Engine, command: u32) -> PwmStatus {
+pub unsafe extern "C" fn pwm_engine_command(engine: *mut Engine, command: u32, arg: f64) -> PwmStatus {
     let Some(engine) = engine.as_mut() else {
         return PwmStatus::NullPointer;
     };
-    let Ok(command) = Command::try_from(command) else {
+    let Some(command) = Command::parse(command, arg) else {
         return PwmStatus::InvalidArgument;
     };
     status(engine.command(command))
+}
+
+/// Applies settings given as JSON (see `engine::Config`). Malformed JSON
+/// leaves the current settings in place.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null. `json`
+/// must be a NUL-terminated string, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_set_config(engine: *mut Engine, json: *const c_char) -> PwmStatus {
+    let Some(engine) = engine.as_mut() else {
+        return PwmStatus::NullPointer;
+    };
+    if json.is_null() {
+        return PwmStatus::InvalidArgument;
+    }
+    let Some(config) = CStr::from_ptr(json).to_str().ok().and_then(Config::from_json) else {
+        return PwmStatus::InvalidArgument;
+    };
+    status(engine.set_config(config))
+}
+
+/// The layout as JSON (see `engine::State`), or null for a null engine.
+/// Free with `pwm_string_free`.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_state_json(engine: *const Engine) -> *mut c_char {
+    let Some(engine) = engine.as_ref() else {
+        return ptr::null_mut();
+    };
+    c_string(&serde_json::to_string(&engine.state()).unwrap_or_default())
+}
+
+/// # Safety
+/// `string` must come from this library and be freed only once, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_string_free(string: *mut c_char) {
+    if !string.is_null() {
+        drop(CString::from_raw(string));
+    }
 }
 
 /// # Safety
@@ -244,7 +287,6 @@ pub unsafe extern "C" fn pwm_engine_set_change_handler(
 mod tests {
     use super::*;
     use crate::mock::MockBackend;
-    use std::ffi::CStr;
 
     fn raw_engine(windows: Vec<WindowInfo>) -> *mut Engine {
         Box::into_raw(Box::new(Engine::new(Box::new(MockBackend::new(windows)))))
@@ -281,8 +323,38 @@ mod tests {
             assert_eq!(pwm_engine_list_windows(ptr::null()).status, PwmStatus::NullPointer);
             assert_eq!(pwm_engine_set_window_frame(ptr::null(), 1, Rect::default()), PwmStatus::NullPointer);
             assert_eq!(pwm_engine_sync(ptr::null_mut()), PwmStatus::NullPointer);
-            assert_eq!(pwm_engine_command(ptr::null_mut(), 0), PwmStatus::NullPointer);
+            assert_eq!(pwm_engine_command(ptr::null_mut(), 0, 0.0), PwmStatus::NullPointer);
             pwm_engine_free(ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn set_config_rejects_bad_json() {
+        let engine = raw_engine(vec![]);
+        unsafe {
+            assert_eq!(pwm_engine_set_config(engine, c"{\"gap\":12}".as_ptr()), PwmStatus::Ok);
+            assert_eq!(pwm_engine_set_config(engine, c"{".as_ptr()), PwmStatus::InvalidArgument);
+            assert_eq!(pwm_engine_set_config(engine, ptr::null()), PwmStatus::InvalidArgument);
+            assert_eq!(pwm_engine_set_config(ptr::null_mut(), c"{}".as_ptr()), PwmStatus::NullPointer);
+            assert_eq!((*engine).config().gap, 12.0);
+            pwm_engine_free(engine);
+        }
+    }
+
+    #[test]
+    fn state_json_round_trips() {
+        let engine = raw_engine(vec![MockBackend::window(1, Rect::new(10.0, 10.0, 10.0, 10.0))]);
+        unsafe {
+            let areas = [Rect::new(0.0, 0.0, 800.0, 600.0)];
+            pwm_engine_set_monitors(engine, areas.as_ptr(), 1);
+            pwm_engine_sync(engine);
+            let json = pwm_engine_state_json(engine);
+            let value: serde_json::Value = serde_json::from_str(CStr::from_ptr(json).to_str().unwrap()).unwrap();
+            assert_eq!(value["windows"][0]["id"], 1);
+            pwm_string_free(json);
+            assert!(pwm_engine_state_json(ptr::null()).is_null());
+            pwm_string_free(ptr::null_mut());
+            pwm_engine_free(engine);
         }
     }
 
@@ -296,8 +368,8 @@ mod tests {
             assert_eq!(pwm_engine_set_monitors(engine, areas.as_ptr(), 1), PwmStatus::Ok);
             assert_eq!(pwm_engine_sync(engine), PwmStatus::Ok);
             assert_eq!((*engine).workspace(0).unwrap().focused_window(), Some(1));
-            assert_eq!(pwm_engine_command(engine, Command::FocusLeft as u32), PwmStatus::Ok);
-            assert_eq!(pwm_engine_command(engine, 99), PwmStatus::InvalidArgument);
+            assert_eq!(pwm_engine_command(engine, 0, 0.0), PwmStatus::Ok);
+            assert_eq!(pwm_engine_command(engine, 99, 0.0), PwmStatus::InvalidArgument);
             assert_eq!(pwm_engine_set_window_frame(engine, 9, Rect::default()), PwmStatus::WindowNotFound);
             pwm_engine_free(engine);
         }

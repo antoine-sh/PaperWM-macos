@@ -21,7 +21,7 @@ typedef enum {
     PWM_STATUS_INVALID_ARGUMENT = 5,
 } PwmStatus;
 
-// Keyboard actions for pwm_engine_command. Mirrors engine::Command.
+// Actions for pwm_engine_command. Mirrors engine::Command::parse.
 typedef enum {
     PWM_COMMAND_FOCUS_LEFT = 0,
     PWM_COMMAND_FOCUS_RIGHT = 1,
@@ -36,6 +36,24 @@ typedef enum {
     PWM_COMMAND_CENTER = 10,
     PWM_COMMAND_CONSUME = 11,
     PWM_COMMAND_EXPEL = 12,
+    PWM_COMMAND_SWITCH_WORKSPACE = 13,          // arg: workspace index
+    PWM_COMMAND_MOVE_TO_WORKSPACE = 14,         // arg: workspace index
+    PWM_COMMAND_NEXT_WORKSPACE = 15,
+    PWM_COMMAND_PREVIOUS_WORKSPACE = 16,
+    PWM_COMMAND_MOVE_TO_NEXT_WORKSPACE = 17,
+    PWM_COMMAND_MOVE_TO_PREVIOUS_WORKSPACE = 18,
+    PWM_COMMAND_LAST_WORKSPACE = 19,
+    PWM_COMMAND_FOCUS_MONITOR_LEFT = 20,
+    PWM_COMMAND_FOCUS_MONITOR_RIGHT = 21,
+    PWM_COMMAND_MOVE_TO_MONITOR_LEFT = 22,
+    PWM_COMMAND_MOVE_TO_MONITOR_RIGHT = 23,
+    PWM_COMMAND_TOGGLE_SCRATCH = 24,
+    PWM_COMMAND_MOVE_TO_SCRATCH = 25,
+    PWM_COMMAND_FOCUS_WINDOW = 26,              // arg: window id
+    PWM_COMMAND_SCROLL_BY = 27,                 // arg: points, positive pans right
+    PWM_COMMAND_SCROLL_END = 28,
+    PWM_COMMAND_FOCUS_FIRST = 29,
+    PWM_COMMAND_FOCUS_LAST = 30,
 } PwmCommand;
 
 // Top-left origin, y grows downwards (Accessibility coordinates).
@@ -84,8 +102,16 @@ PwmStatus pwm_engine_set_monitors(PwmEngine *engine, const PwmRect *areas, size_
 // Brings the layout up to date with the current windows and focus.
 PwmStatus pwm_engine_sync(PwmEngine *engine);
 
-// `command` is a PwmCommand value.
-PwmStatus pwm_engine_command(PwmEngine *engine, uint32_t command);
+// `command` is a PwmCommand value; `arg` is ignored by commands without one.
+PwmStatus pwm_engine_command(PwmEngine *engine, uint32_t command, double arg);
+
+// Settings as JSON: {"gap": 8, "width_presets": [0.33, 0.5], "workspace_names": ["1", ...]}.
+// Missing fields keep their defaults; malformed JSON returns INVALID_ARGUMENT.
+PwmStatus pwm_engine_set_config(PwmEngine *engine, const char *json);
+
+// Layout snapshot as JSON (engine::State). Free with pwm_string_free.
+char *pwm_engine_state_json(const PwmEngine *engine);
+void pwm_string_free(char *string);
 
 // Start or stop watching an app's windows for changes.
 void pwm_engine_observe_app(const PwmEngine *engine, int32_t pid);

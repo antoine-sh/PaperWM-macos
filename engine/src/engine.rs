@@ -3,68 +3,182 @@
 
 use std::collections::{HashMap, HashSet};
 
+use serde::{Deserialize, Serialize};
+
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
 use crate::geometry::Rect;
 use crate::placement;
 use crate::workspace::Workspace;
 
-#[derive(Debug, Clone, PartialEq)]
+/// Number of PaperWM workspaces.
+pub const WORKSPACE_COUNT: usize = 9;
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(default)]
 pub struct Config {
     /// Space between columns, between stacked windows and around the edges.
     pub gap: f64,
     /// Column widths `CycleWidth` steps through, as fractions of the screen.
     pub width_presets: Vec<f64>,
+    /// One name per workspace.
+    pub workspace_names: Vec<String>,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { gap: 8.0, width_presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0] }
+        Self {
+            gap: 8.0,
+            width_presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0],
+            workspace_names: (1..=WORKSPACE_COUNT).map(|i| i.to_string()).collect(),
+        }
     }
 }
 
-/// Keyboard actions, matching PaperWM's defaults.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u32)]
+impl Config {
+    /// Parses the app's settings; missing or empty fields take their
+    /// defaults. Returns `None` for malformed JSON or a negative gap.
+    pub fn from_json(json: &str) -> Option<Self> {
+        let mut config: Config = serde_json::from_str(json).ok()?;
+        if config.gap.is_nan() || config.gap < 0.0 {
+            return None;
+        }
+        let defaults = Config::default();
+        if config.width_presets.is_empty() {
+            config.width_presets = defaults.width_presets;
+        }
+        config.workspace_names.truncate(WORKSPACE_COUNT);
+        let have = config.workspace_names.len();
+        config.workspace_names.extend(defaults.workspace_names.into_iter().skip(have));
+        Some(config)
+    }
+}
+
+/// Keyboard and gesture actions. The numbers are the `PWM_COMMAND_*`
+/// values of the C interface.
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Command {
-    FocusLeft = 0,
-    FocusRight = 1,
-    FocusUp = 2,
-    FocusDown = 3,
-    MoveLeft = 4,
-    MoveRight = 5,
-    MoveUp = 6,
-    MoveDown = 7,
-    CycleWidth = 8,
-    ToggleFullWidth = 9,
-    Center = 10,
+    FocusLeft,
+    FocusRight,
+    FocusUp,
+    FocusDown,
+    MoveLeft,
+    MoveRight,
+    MoveUp,
+    MoveDown,
+    CycleWidth,
+    ToggleFullWidth,
+    Center,
     /// Pull the next column's window into the focused column.
-    Consume = 11,
+    Consume,
     /// Push the focused window out into its own column.
-    Expel = 12,
+    Expel,
+    SwitchWorkspace(usize),
+    MoveToWorkspace(usize),
+    NextWorkspace,
+    PreviousWorkspace,
+    MoveToNextWorkspace,
+    MoveToPreviousWorkspace,
+    /// The most recently shown other workspace.
+    LastWorkspace,
+    FocusMonitorLeft,
+    FocusMonitorRight,
+    MoveToMonitorLeft,
+    MoveToMonitorRight,
+    ToggleScratch,
+    /// Moves the focused window into the scratch layer, or back out.
+    MoveToScratch,
+    FocusWindow(WindowId),
+    /// Pans the active strip by this many points without changing focus.
+    ScrollBy(f64),
+    /// Ends a pan: focuses the column nearest the middle of the screen.
+    ScrollEnd,
+    FocusFirst,
+    FocusLast,
 }
 
-impl TryFrom<u32> for Command {
-    type Error = u32;
-
-    fn try_from(value: u32) -> std::result::Result<Self, u32> {
+impl Command {
+    /// Decodes a `PWM_COMMAND_*` value and its argument.
+    pub fn parse(code: u32, arg: f64) -> Option<Self> {
         use Command::*;
-        const ALL: [Command; 13] = [
-            FocusLeft,
-            FocusRight,
-            FocusUp,
-            FocusDown,
-            MoveLeft,
-            MoveRight,
-            MoveUp,
-            MoveDown,
-            CycleWidth,
-            ToggleFullWidth,
-            Center,
-            Consume,
-            Expel,
-        ];
-        ALL.get(value as usize).copied().ok_or(value)
+        let index = || (arg >= 0.0 && arg.fract() == 0.0 && arg <= u32::MAX as f64).then_some(arg as u32);
+        Some(match code {
+            0 => FocusLeft,
+            1 => FocusRight,
+            2 => FocusUp,
+            3 => FocusDown,
+            4 => MoveLeft,
+            5 => MoveRight,
+            6 => MoveUp,
+            7 => MoveDown,
+            8 => CycleWidth,
+            9 => ToggleFullWidth,
+            10 => Center,
+            11 => Consume,
+            12 => Expel,
+            13 => SwitchWorkspace(index()? as usize),
+            14 => MoveToWorkspace(index()? as usize),
+            15 => NextWorkspace,
+            16 => PreviousWorkspace,
+            17 => MoveToNextWorkspace,
+            18 => MoveToPreviousWorkspace,
+            19 => LastWorkspace,
+            20 => FocusMonitorLeft,
+            21 => FocusMonitorRight,
+            22 => MoveToMonitorLeft,
+            23 => MoveToMonitorRight,
+            24 => ToggleScratch,
+            25 => MoveToScratch,
+            26 => FocusWindow(index()?),
+            27 if arg.is_finite() => ScrollBy(arg),
+            28 => ScrollEnd,
+            29 => FocusFirst,
+            30 => FocusLast,
+            _ => return None,
+        })
     }
+}
+
+/// Snapshot of the layout for the app's UI, sent as JSON.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct State {
+    pub active_monitor: usize,
+    pub gap: f64,
+    pub monitors: Vec<MonitorState>,
+    pub workspaces: Vec<WorkspaceState>,
+    pub windows: Vec<WindowState>,
+    /// Window ids, most recently focused first.
+    pub mru: Vec<WindowId>,
+    pub scratch: Vec<WindowId>,
+    pub scratch_visible: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct MonitorState {
+    pub area: Rect,
+    pub workspace: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WorkspaceState {
+    pub name: String,
+    pub scroll: f64,
+    pub focused_column: usize,
+    pub columns: Vec<ColumnState>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ColumnState {
+    pub width: f64,
+    pub windows: Vec<WindowId>,
+    pub focused_row: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct WindowState {
+    pub id: WindowId,
+    pub pid: i32,
+    pub app_name: String,
+    pub title: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -81,11 +195,20 @@ pub struct Engine {
     active: usize,
     /// Last frame set on each window, to skip redundant Accessibility calls.
     applied: HashMap<WindowId, Rect>,
+    /// What the last sync saw of each managed window, for the UI.
+    info: HashMap<WindowId, WindowInfo>,
 }
 
 impl Engine {
     pub fn new(backend: Box<dyn WindowBackend>) -> Self {
-        Self { backend, config: Config::default(), monitors: Vec::new(), active: 0, applied: HashMap::new() }
+        Self {
+            backend,
+            config: Config::default(),
+            monitors: Vec::new(),
+            active: 0,
+            applied: HashMap::new(),
+            info: HashMap::new(),
+        }
     }
 
     /// An engine driving the current platform's windows.
@@ -99,6 +222,63 @@ impl Engine {
 
     pub fn windows(&self) -> Result<Vec<WindowInfo>> {
         self.backend.windows()
+    }
+
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
+    /// Replaces the settings and lays everything out again.
+    pub fn set_config(&mut self, config: Config) -> Result<()> {
+        self.config = config;
+        self.applied.clear();
+        self.ensure_visible_all();
+        self.apply()
+    }
+
+    pub fn state(&self) -> State {
+        let workspaces = self
+            .monitors
+            .iter()
+            .enumerate()
+            .map(|(i, m)| WorkspaceState {
+                name: self.config.workspace_names.get(i).cloned().unwrap_or_default(),
+                scroll: m.workspace.scroll(),
+                focused_column: m.workspace.focused_column(),
+                columns: m
+                    .workspace
+                    .columns()
+                    .iter()
+                    .map(|c| ColumnState {
+                        width: c.width(),
+                        windows: c.windows().to_vec(),
+                        focused_row: c.focused_row(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        let windows = self
+            .monitors
+            .iter()
+            .flat_map(|m| m.workspace.windows())
+            .filter_map(|id| self.info.get(&id))
+            .map(|w| WindowState { id: w.id, pid: w.pid, app_name: w.app_name.clone(), title: w.title.clone() })
+            .collect();
+        State {
+            active_monitor: self.active,
+            gap: self.config.gap,
+            monitors: self
+                .monitors
+                .iter()
+                .enumerate()
+                .map(|(i, m)| MonitorState { area: m.area, workspace: i })
+                .collect(),
+            workspaces,
+            windows,
+            mru: Vec::new(),
+            scratch: Vec::new(),
+            scratch_visible: true,
+        }
     }
 
     pub fn workspace(&self, monitor: usize) -> Option<&Workspace> {
@@ -137,6 +317,7 @@ impl Engine {
         let windows = self.backend.windows()?;
         let tileable: HashMap<WindowId, &WindowInfo> =
             windows.iter().filter(|w| w.is_tileable()).map(|w| (w.id, w)).collect();
+        self.info = tileable.iter().map(|(&id, &w)| (id, w.clone())).collect();
 
         let mut managed = HashSet::new();
         for monitor in &mut self.monitors {
@@ -192,6 +373,7 @@ impl Engine {
                 ws.center_focused(viewport, gap);
                 true
             }
+            _ => false,
         };
         if command != Command::Center {
             ws.ensure_focused_visible(viewport, gap);
@@ -416,9 +598,61 @@ mod tests {
 
     #[test]
     fn command_parsing_rejects_unknown_values() {
-        assert_eq!(Command::try_from(0), Ok(Command::FocusLeft));
-        assert_eq!(Command::try_from(12), Ok(Command::Expel));
-        assert_eq!(Command::try_from(13), Err(13));
+        assert_eq!(Command::parse(0, 0.0), Some(Command::FocusLeft));
+        assert_eq!(Command::parse(12, 0.0), Some(Command::Expel));
+        assert_eq!(Command::parse(31, 0.0), None);
+    }
+
+    #[test]
+    fn command_parsing_takes_arguments() {
+        assert_eq!(Command::parse(13, 2.0), Some(Command::SwitchWorkspace(2)));
+        assert_eq!(Command::parse(14, 8.0), Some(Command::MoveToWorkspace(8)));
+        assert_eq!(Command::parse(26, 7.0), Some(Command::FocusWindow(7)));
+        assert_eq!(Command::parse(27, -12.5), Some(Command::ScrollBy(-12.5)));
+        assert_eq!(Command::parse(30, 0.0), Some(Command::FocusLast));
+        assert_eq!(Command::parse(13, -1.0), None);
+        assert_eq!(Command::parse(13, 1.5), None);
+    }
+
+    #[test]
+    fn config_fills_defaults() {
+        let config = Config::from_json(r#"{"gap":4}"#).unwrap();
+        assert_eq!(config.gap, 4.0);
+        assert_eq!(config.width_presets, Config::default().width_presets);
+        assert_eq!(config.workspace_names, (1..=9).map(|i| i.to_string()).collect::<Vec<_>>());
+
+        let config = Config::from_json(r#"{"width_presets":[],"workspace_names":["Web"]}"#).unwrap();
+        assert_eq!(config.width_presets, Config::default().width_presets);
+        assert_eq!(config.workspace_names[0], "Web");
+        assert_eq!(config.workspace_names[1], "2");
+        assert_eq!(config.workspace_names.len(), WORKSPACE_COUNT);
+
+        assert_eq!(Config::from_json("nope"), None);
+        assert_eq!(Config::from_json(r#"{"gap":-3}"#), None);
+    }
+
+    #[test]
+    fn set_config_relayouts_with_the_new_gap() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.set_config(Config { gap: 20.0, ..Config::default() }).unwrap();
+        assert_eq!(backend.frame_of(1).unwrap().x, 20.0);
+    }
+
+    #[test]
+    fn state_lists_columns_and_windows() {
+        let (mut engine, _) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        let state = engine.state();
+        assert_eq!(state.workspaces[0].columns.len(), 2);
+        assert_eq!(state.workspaces[0].name, "1");
+        assert_eq!(state.monitors[0].workspace, 0);
+        assert_eq!(state.windows.iter().map(|w| w.id).collect::<Vec<_>>(), vec![1, 2]);
+        assert_eq!(state.windows[0].app_name, "App 1");
+        let json = serde_json::to_value(&state).unwrap();
+        for key in ["active_monitor", "gap", "monitors", "workspaces", "windows", "mru", "scratch", "scratch_visible"] {
+            assert!(json.get(key).is_some(), "missing {key}");
+        }
     }
 
     #[test]
