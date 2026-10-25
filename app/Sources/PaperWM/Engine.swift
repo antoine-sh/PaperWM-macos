@@ -125,14 +125,21 @@ final class Engine {
         return decoder
     }()
 
+    /// The last layout decoded and the JSON it came from: most syncs change
+    /// nothing, and comparing bytes is far cheaper than decoding them.
+    private var lastState: (json: Data, state: EngineState)?
+
     /// The current layout, or nil if the engine could not describe it.
     func state() -> EngineState? {
         guard let json = pwm_engine_state_json(handle) else { return nil }
         defer { pwm_string_free(json) }
-        // Decode the engine's buffer in place rather than copying it twice.
+        // Look at the engine's buffer in place rather than copying it.
         let data = Data(bytesNoCopy: UnsafeMutableRawPointer(json), count: strlen(json), deallocator: .none)
+        if let lastState, lastState.json == data { return lastState.state }
         guard var state = try? Self.decoder.decode(EngineState.self, from: data) else { return nil }
         state.indexWindows()
+        // A real copy: `data` borrows the buffer freed on return.
+        lastState = (Data(bytes: json, count: data.count), state)
         return state
     }
 

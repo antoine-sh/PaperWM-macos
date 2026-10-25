@@ -18,6 +18,8 @@ final class WindowManager {
     private lazy var gestures = Gestures { [weak self] action in self?.perform(action) }
     private lazy var modifiers = ModifierWatcher { [weak self] in self?.superReleased() }
     private var syncScheduled = false
+    /// A sync asked for during a slide, run when the slide ends.
+    private var syncDeferred = false
     private var hotKeysPaused = false
     /// What was last applied, so settings edits only redo what changed.
     private var appliedConfig = ""
@@ -146,16 +148,30 @@ final class WindowManager {
         report { sliding = try engine.tick(now - lastTick) }
         lastTick = now
         decorations.track()
-        if !sliding { frames.stop() }
+        guard !sliding else { return }
+        frames.stop()
+        if syncDeferred {
+            syncDeferred = false
+            syncNow()
+        }
     }
 
-    /// Syncs on the next run loop turn, coalescing bursts of notifications.
+    /// Syncs shortly, coalescing bursts of notifications: one focus change
+    /// sends several, a few milliseconds apart.
     func scheduleSync() {
         guard !syncScheduled else { return }
         syncScheduled = true
-        Task { @MainActor in
-            self.syncScheduled = false
-            self.syncNow()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.syncScheduled = false
+                // Reading windows mid-slide only finds them in motion.
+                if self.frames.isRunning {
+                    self.syncDeferred = true
+                } else {
+                    self.syncNow()
+                }
+            }
         }
     }
 
