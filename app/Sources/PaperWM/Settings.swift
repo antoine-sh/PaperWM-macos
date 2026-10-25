@@ -16,6 +16,27 @@ enum CenterFocus: String, Codable {
     case always
 }
 
+/// How the windows of one app are placed. Mirrors `engine::AppRule`.
+struct AppRule: Codable, Equatable, Identifiable {
+    enum Action: String, Codable {
+        /// Left out of tiling, like dialogs.
+        case float
+        /// Opens at a fixed column of a fixed workspace.
+        case slot
+    }
+
+    var id = UUID()
+    /// The app's name as macOS shows it; windows are matched on this.
+    var app: String
+    /// Only used to show the app's icon.
+    var bundleID: String?
+    var action = Action.float
+    /// For `slot`, from 0.
+    var workspace = 0
+    /// For `slot`, from 0.
+    var column = 0
+}
+
 /// The user's preferences, stored as JSON in `UserDefaults`.
 @MainActor
 final class Settings: ObservableObject {
@@ -42,6 +63,7 @@ final class Settings: ObservableObject {
         /// Opacity of the dim, 0–1.
         var dimAmount = 0.3
         var minimapStyle: MinimapStyle = .toolbar
+        var appRules: [AppRule] = []
 
         init() {}
 
@@ -63,6 +85,7 @@ final class Settings: ObservableObject {
             dimBackground = try c.decodeIfPresent(Bool.self, forKey: .dimBackground) ?? defaults.dimBackground
             dimAmount = try c.decodeIfPresent(Double.self, forKey: .dimAmount) ?? defaults.dimAmount
             minimapStyle = try c.decodeIfPresent(MinimapStyle.self, forKey: .minimapStyle) ?? defaults.minimapStyle
+            appRules = try c.decodeIfPresent([AppRule].self, forKey: .appRules) ?? defaults.appRules
             workspaceNames += defaults.workspaceNames.dropFirst(workspaceNames.count)
         }
     }
@@ -96,17 +119,28 @@ final class Settings: ObservableObject {
 
     /// The part of the settings the engine uses, as `engine::Config` JSON.
     var engineConfigJSON: String {
+        struct Rule: Encodable {
+            let app: String
+            let action: AppRule.Action
+            let workspace: Int
+            let column: Int
+        }
         struct Config: Encodable {
             let gap: Double
             let widthPresets: [Double]
             let workspaceNames: [String]
             let animationDuration: Double
             let centerFocused: CenterFocus
+            let appRules: [Rule]
         }
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
+        let rules = values.appRules.map {
+            Rule(app: $0.app, action: $0.action, workspace: $0.workspace, column: $0.column)
+        }
         let config = Config(gap: values.gap, widthPresets: values.widthPresets, workspaceNames: values.workspaceNames,
-                            animationDuration: values.animationDuration, centerFocused: values.centerFocused)
+                            animationDuration: values.animationDuration, centerFocused: values.centerFocused,
+                            appRules: rules)
         return (try? encoder.encode(config)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
     }
 

@@ -113,8 +113,8 @@ impl Workspace {
         self.insert_window_at(id, index, width, viewport);
     }
 
-    /// Adds `id` as a new column at `index`, pushing that column and the
-    /// ones after it right, and focuses it.
+    /// Adds `id` as a new column at `index`, or at the end if there are
+    /// fewer columns, pushing the columns from there right, and focuses it.
     pub fn insert_window_at(&mut self, id: WindowId, index: usize, width: f64, viewport: f64) {
         let index = index.min(self.columns.len());
         self.columns.insert(index, Column::new(id, clamp_width(width, viewport)));
@@ -448,6 +448,17 @@ mod tests {
         ws.insert_window(3, 300.0, VIEW);
         assert_eq!(layout(&ws), vec![vec![1], vec![3], vec![2]]);
         assert_eq!(ws.focused_window(), Some(3));
+    }
+
+    #[test]
+    fn inserts_at_a_column_clamped_to_the_end() {
+        let mut ws = workspace(&[300.0, 300.0]);
+        ws.insert_window_at(3, 0, 300.0, VIEW);
+        assert_eq!(layout(&ws), vec![vec![3], vec![1], vec![2]]);
+        assert_eq!(ws.focused_window(), Some(3));
+        ws.insert_window_at(4, 9, 300.0, VIEW);
+        assert_eq!(layout(&ws), vec![vec![3], vec![1], vec![2], vec![4]]);
+        assert_eq!(ws.focused_window(), Some(4));
     }
 
     #[test]
