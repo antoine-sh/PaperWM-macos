@@ -397,6 +397,10 @@ impl Engine {
             Command::MoveToPreviousWorkspace => {
                 self.move_to_workspace((current + WORKSPACE_COUNT - 1) % WORKSPACE_COUNT)
             }
+            Command::FocusMonitorLeft => self.focus_monitor(false),
+            Command::FocusMonitorRight => self.focus_monitor(true),
+            Command::MoveToMonitorLeft => self.move_to_monitor(false),
+            Command::MoveToMonitorRight => self.move_to_monitor(true),
             _ => false,
         };
         if command != Command::Center {
@@ -479,6 +483,34 @@ impl Engine {
         let monitor = self.monitors.iter().position(|m| m.workspace == target).unwrap_or(self.active);
         let viewport = self.viewport(monitor);
         self.workspaces[target].insert_window(id, width, viewport);
+        true
+    }
+
+    /// The nearest monitor whose centre is right (or left) of the active one's.
+    fn monitor_toward(&self, right: bool) -> Option<usize> {
+        let centre = |m: &Monitor| m.area.x + m.area.width / 2.0;
+        let from = centre(&self.monitors[self.active]);
+        self.monitors
+            .iter()
+            .enumerate()
+            .map(|(i, m)| (i, centre(m) - from))
+            .filter(|&(_, d)| if right { d > 0.0 } else { d < 0.0 })
+            .min_by(|a, b| a.1.abs().total_cmp(&b.1.abs()))
+            .map(|(i, _)| i)
+    }
+
+    fn focus_monitor(&mut self, right: bool) -> bool {
+        let Some(monitor) = self.monitor_toward(right) else { return false };
+        self.active = monitor;
+        true
+    }
+
+    fn move_to_monitor(&mut self, right: bool) -> bool {
+        let Some(monitor) = self.monitor_toward(right) else { return false };
+        if !self.move_to_workspace(self.monitors[monitor].workspace) {
+            return false;
+        }
+        self.active = monitor;
         true
     }
 
@@ -835,6 +867,50 @@ mod tests {
         assert_eq!(shown(&engine), vec![8]);
         assert_eq!(engine.command(Command::LastWorkspace), Ok(true));
         assert_eq!(shown(&engine), vec![2]);
+    }
+
+    #[test]
+    fn focus_monitor_right_activates_and_focuses() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 1200.0, 300.0)]);
+        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        assert_eq!(engine.command(Command::FocusMonitorRight), Ok(true));
+        assert_eq!(engine.state().active_monitor, 1);
+        assert_eq!(backend.focused_window(), Some(2));
+        assert_eq!(engine.command(Command::FocusMonitorLeft), Ok(true));
+        assert_eq!(backend.focused_window(), Some(1));
+    }
+
+    #[test]
+    fn no_monitor_in_direction_returns_false() {
+        let (mut engine, _) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.sync().unwrap();
+        assert_eq!(engine.command(Command::FocusMonitorRight), Ok(false));
+        assert_eq!(engine.command(Command::MoveToMonitorLeft), Ok(false));
+        assert_eq!(columns(&engine), vec![vec![1]]);
+    }
+
+    #[test]
+    fn move_to_monitor_inserts_next_to_target_focus() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 1100.0, 300.0), window(3, 1500.0, 300.0)]);
+        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.sync().unwrap();
+        // Window 2 is focused on the right monitor; focus window 1 on the left.
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        assert_eq!(engine.command(Command::MoveToMonitorRight), Ok(true));
+        assert!(engine.workspace(0).unwrap().is_empty());
+        let right: Vec<Vec<WindowId>> =
+            engine.workspace(1).unwrap().columns().iter().map(|c| c.windows().to_vec()).collect();
+        assert_eq!(right, vec![vec![2], vec![1], vec![3]]);
+        assert_eq!(engine.state().active_monitor, 1);
+        assert_eq!(backend.focused_window(), Some(1));
+        assert!(backend.frame_of(1).unwrap().x >= RIGHT.x);
     }
 
     #[test]
