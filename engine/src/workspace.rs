@@ -254,6 +254,19 @@ impl Workspace {
         true
     }
 
+    /// Grows (or, with a negative `delta`, shrinks) the focused column by
+    /// `delta` points, between the minimum width and the viewport.
+    pub fn nudge_width(&mut self, delta: f64, viewport: f64) -> bool {
+        let Some(column) = self.columns.get_mut(self.focused) else { return false };
+        let width = clamp_width(column.width + delta, viewport);
+        if width == column.width {
+            return false;
+        }
+        column.width = width;
+        column.width_before_full = None;
+        true
+    }
+
     pub fn toggle_full_width(&mut self, viewport: f64) -> bool {
         let Some(column) = self.columns.get_mut(self.focused) else { return false };
         match column.width_before_full.take() {
@@ -589,6 +602,19 @@ mod tests {
         assert_eq!(ws.columns()[0].width(), VIEW);
         ws.toggle_full_width(VIEW);
         assert_eq!(ws.columns()[0].width(), 300.0);
+    }
+
+    #[test]
+    fn nudge_width_steps_and_clamps() {
+        let mut ws = workspace(&[300.0]);
+        assert!(ws.nudge_width(100.0, VIEW));
+        assert_eq!(ws.columns()[0].width(), 400.0);
+        assert!(ws.nudge_width(1000.0, VIEW));
+        assert_eq!(ws.columns()[0].width(), VIEW);
+        assert!(!ws.nudge_width(100.0, VIEW));
+        assert!(ws.nudge_width(-2000.0, VIEW));
+        assert_eq!(ws.columns()[0].width(), MIN_COLUMN_WIDTH);
+        assert!(!ws.nudge_width(-100.0, VIEW));
     }
 
     #[test]

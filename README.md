@@ -34,6 +34,7 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 | ⌃⌥⇧ ← / → | Move the column left / right |
 | ⌃⌥⇧ ↑ / ↓ | Move the window up / down in its column |
 | ⌃⌥ R | Cycle column width (⅓, ½, ⅔ of the screen) |
+| ⌃⌥ = / - | Widen / narrow the column by a tenth of the screen |
 | ⌃⌥ F | Toggle full width |
 | ⌃⌥ C | Center the column |
 | ⌃⌥ I | Pull the next column's window into this column |

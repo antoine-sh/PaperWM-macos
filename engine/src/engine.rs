@@ -15,6 +15,9 @@ use crate::workspace::{CenterFocus, Workspace};
 /// Number of PaperWM workspaces.
 pub const WORKSPACE_COUNT: usize = 9;
 
+/// Share of the screen `WidenColumn` and `NarrowColumn` add or take away.
+const WIDTH_STEP: f64 = 0.1;
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -138,6 +141,9 @@ pub enum Command {
     ScrollEnd,
     FocusFirst,
     FocusLast,
+    /// Widens the focused column by `WIDTH_STEP` of the screen.
+    WidenColumn,
+    NarrowColumn,
 }
 
 impl Command {
@@ -177,6 +183,8 @@ impl Command {
             28 => ScrollEnd,
             29 => FocusFirst,
             30 => FocusLast,
+            31 => WidenColumn,
+            32 => NarrowColumn,
             _ => return None,
         })
     }
@@ -647,6 +655,8 @@ impl Engine {
             }
             Command::FocusFirst => ws.focus_edge(false),
             Command::FocusLast => ws.focus_edge(true),
+            Command::WidenColumn => ws.nudge_width(WIDTH_STEP * viewport, viewport),
+            Command::NarrowColumn => ws.nudge_width(-WIDTH_STEP * viewport, viewport),
         };
         if !matches!(command, Command::Center | Command::ScrollBy(_)) {
             self.ensure_visible_all();
@@ -1138,6 +1148,19 @@ mod tests {
     }
 
     #[test]
+    fn widen_column_resizes_and_scrolls_it_into_view() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 400.0), window(2, 500.0, 500.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::FocusRight).unwrap();
+        assert_eq!(engine.command(Command::WidenColumn), Ok(true));
+        assert_eq!(engine.workspace(0).unwrap().scroll(), 8.0);
+        assert_eq!(backend.frame_of(2), Some(Rect::new(408.0, 33.0, 600.0, 584.0)));
+        assert_eq!(engine.command(Command::NarrowColumn), Ok(true));
+        assert_eq!(engine.workspace(0).unwrap().scroll(), 0.0);
+        assert_eq!(backend.frame_of(2).unwrap().width, 500.0);
+    }
+
+    #[test]
     fn move_and_stack_commands_rearrange_columns() {
         let (mut engine, _) =
             engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0), window(3, 200.0, 300.0)]);
@@ -1539,7 +1562,7 @@ mod tests {
     fn command_parsing_rejects_unknown_values() {
         assert_eq!(Command::parse(0, 0.0), Some(Command::FocusLeft));
         assert_eq!(Command::parse(12, 0.0), Some(Command::Expel));
-        assert_eq!(Command::parse(31, 0.0), None);
+        assert_eq!(Command::parse(u32::MAX, 0.0), None);
     }
 
     #[test]

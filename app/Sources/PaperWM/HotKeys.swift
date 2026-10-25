@@ -91,6 +91,8 @@ struct HotKey {
             key("move-up", "Move Window Up", kVK_UpArrow, shift, .engine(PWM_COMMAND_MOVE_UP)),
             key("move-down", "Move Window Down", kVK_DownArrow, shift, .engine(PWM_COMMAND_MOVE_DOWN)),
             key("cycle-width", "Cycle Column Width", kVK_ANSI_R, base, .engine(PWM_COMMAND_CYCLE_WIDTH)),
+            key("widen-column", "Widen Column", kVK_ANSI_Equal, base, .engine(PWM_COMMAND_WIDEN_COLUMN)),
+            key("narrow-column", "Narrow Column", kVK_ANSI_Minus, base, .engine(PWM_COMMAND_NARROW_COLUMN)),
             key("full-width", "Toggle Full Width", kVK_ANSI_F, base, .engine(PWM_COMMAND_TOGGLE_FULL_WIDTH)),
             key("center", "Center Column", kVK_ANSI_C, base, .engine(PWM_COMMAND_CENTER)),
             key("consume", "Pull Next Window into Column", kVK_ANSI_I, base, .engine(PWM_COMMAND_CONSUME)),
