@@ -1,0 +1,8 @@
+module CPaperWMEngine {
+    header "../../../engine/include/paperwm_engine.h"
+    link "paperwm_engine"
+    link framework "ApplicationServices"
+    link framework "CoreFoundation"
+    link framework "CoreGraphics"
+    export *
+}

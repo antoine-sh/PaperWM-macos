@@ -1,0 +1,16 @@
+[package]
+name = "paperwm-engine"
+version = "0.1.0"
+edition = "2021"
+description = "Window-management engine for PaperWM on macOS"
+publish = false
+
+[lib]
+name = "paperwm_engine"
+# staticlib is linked into the Swift app; rlib is used by Rust tests.
+crate-type = ["staticlib", "rlib"]
+
+[target.'cfg(target_os = "macos")'.dependencies]
+accessibility-sys = "0.2"
+core-foundation = "0.10"
+core-foundation-sys = "0.8"
