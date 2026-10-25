@@ -14,10 +14,10 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 - **Scratch layer**: floating windows above the workspaces that you can show or hide together.
 - **Window switcher**: ⌃⌥Tab through recently used windows across all workspaces, with live previews if you grant Screen Recording permission (app icons otherwise).
 - **Trackpad**: hold ⌃⌥ and scroll with two fingers sideways to pan the strip (focus lands on the column in the middle when you let go), or up/down to switch workspace. macOS reserves three-finger swipes, so this stands in for PaperWM's.
-- **Minimap**: an overview of the strip appears briefly while you navigate.
+- **Minimap**: an overview of the strip appears briefly while you navigate. In Settings, pick the strip view or a small toolbar of app icons along the bottom of the screen (one per column, focused one highlighted).
 - **Focus highlight**: optionally draw a colored border around the focused window and dim the windows behind it. Both are off by default; turn them on from the menu, Settings or their shortcuts.
 - **Menu bar**: shows the current workspace's name; the menu switches workspaces, toggles the focus border and dimming, and opens Settings.
-- **Settings** (⌘, from the menu): gaps, column width presets, workspace names, border color and width, dim strength, and every shortcut can be re-recorded.
+- **Settings** (⌘, from the menu): gaps, column width presets, workspace names, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
 
 ### Keyboard shortcuts
 
