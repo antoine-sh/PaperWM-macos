@@ -27,7 +27,14 @@ extern "C" {
 }
 
 /// How long to wait for an unresponsive app before giving up, in seconds.
-const MESSAGING_TIMEOUT: f32 = 1.0;
+pub const MESSAGING_TIMEOUT: f32 = 0.5;
+
+/// Sets [`MESSAGING_TIMEOUT`] for every element, window elements included,
+/// instead of macOS's default of about six seconds.
+pub fn set_global_timeout() {
+    let system = AxElement::system_wide();
+    unsafe { AXUIElementSetMessagingTimeout(system.as_raw(), MESSAGING_TIMEOUT) };
+}
 
 pub struct AxElement(AXUIElementRef);
 
