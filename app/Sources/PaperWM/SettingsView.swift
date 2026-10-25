@@ -103,7 +103,11 @@ struct SettingsView: View {
                         Button {
                             addRule(app: app.name, bundleID: app.bundleID)
                         } label: {
-                            Label { Text(app.name) } icon: { Image(nsImage: AppIcons.small(app.icon)) }
+                            Label {
+                                Text(app.name)
+                            } icon: {
+                                Image(nsImage: AppIcons.small(bundleID: app.bundleID, name: app.name))
+                            }
                         }
                     }
                     if !runningApps.isEmpty { Divider() }
@@ -122,7 +126,6 @@ struct SettingsView: View {
     private struct RunningApp {
         let name: String
         let bundleID: String?
-        let icon: NSImage?
     }
 
     /// Running apps without a rule yet, by name.
@@ -132,7 +135,7 @@ struct SettingsView: View {
         return NSWorkspace.shared.runningApplications
             .filter { $0.activationPolicy == .regular && $0.processIdentifier != getpid() }
             .compactMap { app in
-                app.localizedName.map { RunningApp(name: $0, bundleID: app.bundleIdentifier, icon: app.icon) }
+                app.localizedName.map { RunningApp(name: $0, bundleID: app.bundleIdentifier) }
             }
             .filter { !taken.contains($0.name) && seen.insert($0.name).inserted }
             .sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
@@ -161,9 +164,14 @@ struct SettingsView: View {
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
         panel.prompt = "Add"
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        var name = FileManager.default.displayName(atPath: url.path)
+        // Windows report the app's bundle name once it runs, which can
+        // differ from its file name ("Code" for Visual Studio Code.app).
+        let bundle = Bundle(url: url)
+        let info = (bundle?.localizedInfoDictionary ?? [:]).merging(bundle?.infoDictionary ?? [:]) { local, _ in local }
+        var name = (info["CFBundleDisplayName"] ?? info["CFBundleName"]) as? String
+            ?? FileManager.default.displayName(atPath: url.path)
         if name.hasSuffix(".app") { name.removeLast(4) }
-        addRule(app: name, bundleID: Bundle(url: url)?.bundleIdentifier)
+        addRule(app: name, bundleID: bundle?.bundleIdentifier)
     }
 
     private var shortcuts: some View {
@@ -221,7 +229,7 @@ private struct AppRuleRow: View {
 
     var body: some View {
         HStack {
-            Image(nsImage: AppIcons.small(AppIcons.icon(bundleID: rule.bundleID, name: rule.app)))
+            Image(nsImage: AppIcons.small(bundleID: rule.bundleID, name: rule.app))
             Text(rule.app).lineLimit(1)
             Spacer()
             Picker("Placement", selection: $rule.action) {

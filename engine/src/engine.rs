@@ -319,17 +319,18 @@ impl Engine {
         let resnap = relayout || config.animation_duration != self.config.animation_duration;
         let rules_changed = config.app_rules != self.config.app_rules;
         self.config = config;
-        if rules_changed {
-            // Floating windows are not tracked, so every app is read again
-            // to tile the ones that no longer float, or release new floaters.
-            self.backend.invalidate();
-            self.sync()?;
-        }
         if relayout {
             self.ensure_visible_all();
         }
         if resnap {
             self.snap_all();
+        }
+        if rules_changed {
+            // Floating windows are not tracked, so every app is read again
+            // to tile the ones that no longer float, or release new floaters.
+            // The sync lays everything out, so it comes last.
+            self.backend.invalidate();
+            return self.sync();
         }
         if relayout {
             self.apply()?;
@@ -448,7 +449,8 @@ impl Engine {
             }
         }
         // Windows of floating apps leave the layout; ones it held go back on
-        // screen, since they may be parked or hidden.
+        // screen, since they may be parked or hidden: centred on the monitor
+        // showing them, or else the active one.
         let floating: Vec<WindowId> = current
             .values()
             .filter(|w| self.config.rule_for(&w.app_name).is_some_and(|r| r.action == AppAction::Float))
@@ -458,7 +460,10 @@ impl Engine {
         for id in floating {
             let info = current.remove(&id).expect("listed above");
             if self.info.contains_key(&id) {
-                released.push((id, self.applier.get(id).unwrap_or(info.frame)));
+                let workspace = self.workspaces.iter().position(|w| w.contains(id));
+                let monitor = self.monitors.iter().find(|m| Some(m.workspace) == workspace);
+                let area = monitor.unwrap_or(&self.monitors[self.active]).area;
+                released.push((id, centred(self.applier.get(id).unwrap_or(info.frame), area)));
                 self.applier.forget(id);
             }
         }
@@ -485,21 +490,27 @@ impl Engine {
         let mut new: Vec<(WindowId, Rect)> =
             self.info.values().filter(|w| !managed.contains(&w.id)).map(|w| (w.id, w.frame)).collect();
         new.sort_by(|a, b| a.1.x.total_cmp(&b.1.x).then(a.0.cmp(&b.0)));
+        // Windows of one slotted app placed so far, so several arriving at
+        // once keep their left-to-right order.
+        let mut slotted: HashMap<String, usize> = HashMap::new();
         for (id, frame) in new {
-            let slot = self.config.rule_for(&self.info[&id].app_name).filter(|r| r.action == AppAction::Slot);
-            if let Some(&AppRule { workspace, column, .. }) = slot {
+            let app = &self.info[&id].app_name;
+            if let Some(&AppRule { workspace, column, .. }) =
+                self.config.rule_for(app).filter(|r| r.action == AppAction::Slot)
+            {
+                let placed = slotted.entry(app.clone()).or_default();
                 let monitor = self.monitors.iter().position(|m| m.workspace == workspace).unwrap_or(self.active);
                 let viewport = self.viewport(monitor);
-                self.workspaces[workspace].insert_window_at(id, column, frame.width, viewport);
+                self.workspaces[workspace].insert_window_at(id, column + *placed, frame.width, viewport);
+                *placed += 1;
                 continue;
             }
             let monitor = self.monitor_at(frame).unwrap_or(self.active);
             let viewport = self.viewport(monitor);
             self.workspaces[self.monitors[monitor].workspace].insert_window(id, frame.width, viewport);
         }
-        let area = self.monitors[self.active].area;
         for (id, frame) in released {
-            match self.backend.set_frame(id, centred(frame, area)) {
+            match self.backend.set_frame(id, frame) {
                 Ok(()) | Err(BackendError::WindowNotFound(_)) => {}
                 Err(err) => return Err(err),
             }
@@ -1512,6 +1523,16 @@ mod tests {
         engine.sync().unwrap();
         assert_eq!(engine.workspace(2).unwrap().windows().collect::<Vec<_>>(), vec![4]);
         assert!(is_hidden(backend.frame_of(4).unwrap()));
+
+        // Several at once keep their left-to-right order.
+        let mut a = window(5, 0.0, 300.0);
+        let mut b = window(6, 400.0, 300.0);
+        a.app_name = "App 3".into();
+        b.app_name = "App 3".into();
+        backend.add(b);
+        backend.add(a);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![5], vec![6], vec![3], vec![1], vec![2]]);
 
         // Focusing it brings its workspace in, as for any hidden window.
         backend.set_focused(Some(4));
