@@ -202,6 +202,8 @@ pub struct Engine {
     /// Floating windows above all workspaces, with the frame each returns to.
     scratch: Vec<(WindowId, Rect)>,
     scratch_visible: bool,
+    /// Windows the user focused, most recent first.
+    mru: Vec<WindowId>,
     /// System focus seen just before the engine last moved focus. macOS
     /// applies focus changes asynchronously, so until the reported focus
     /// differs from this, it is old news and must not be followed.
@@ -223,6 +225,7 @@ impl Engine {
             last_workspace: None,
             scratch: Vec::new(),
             scratch_visible: true,
+            mru: Vec::new(),
             stale_focus: None,
             applied: HashMap::new(),
             info: HashMap::new(),
@@ -278,7 +281,7 @@ impl Engine {
                     .collect(),
             })
             .collect();
-        let windows = self
+        let windows: Vec<WindowState> = self
             .workspaces
             .iter()
             .flat_map(Workspace::windows)
@@ -286,13 +289,16 @@ impl Engine {
             .filter_map(|id| self.info.get(&id))
             .map(|w| WindowState { id: w.id, pid: w.pid, app_name: w.app_name.clone(), title: w.title.clone() })
             .collect();
+        // Windows never focused yet follow the ones that were, in layout order.
+        let mut mru = self.mru.clone();
+        mru.extend(windows.iter().map(|w| w.id).filter(|id| !self.mru.contains(id)));
         State {
             active_monitor: self.active,
             gap: self.config.gap,
             monitors: self.monitors.iter().map(|m| MonitorState { area: m.area, workspace: m.workspace }).collect(),
             workspaces,
             windows,
-            mru: Vec::new(),
+            mru,
             scratch: self.scratch.iter().map(|&(id, _)| id).collect(),
             scratch_visible: self.scratch_visible,
         }
@@ -335,6 +341,7 @@ impl Engine {
         self.info = tileable.iter().map(|(&id, &w)| (id, w.clone())).collect();
 
         self.scratch.retain(|(id, _)| tileable.contains_key(id));
+        self.mru.retain(|id| tileable.contains_key(id));
         if self.scratch_visible {
             // Keep wherever the user dragged them.
             for (id, frame) in &mut self.scratch {
@@ -366,6 +373,7 @@ impl Engine {
             self.stale_focus = None;
             if let Some(id) = focused {
                 self.follow_focus(id);
+                self.touch(id);
             }
         }
 
@@ -418,9 +426,19 @@ impl Engine {
             Command::MoveToMonitorRight => self.move_to_monitor(true),
             Command::ToggleScratch => self.toggle_scratch(&mut raise),
             Command::MoveToScratch => self.move_to_scratch(&mut raise),
-            _ => false,
+            Command::FocusWindow(id) => self.focus_window(id, &mut raise),
+            Command::ScrollBy(dx) => {
+                ws.scroll_by(dx, viewport, gap);
+                true
+            }
+            Command::ScrollEnd => {
+                ws.focus_nearest_centre(viewport, gap);
+                true
+            }
+            Command::FocusFirst => ws.focus_edge(false),
+            Command::FocusLast => ws.focus_edge(true),
         };
-        if command != Command::Center {
+        if !matches!(command, Command::Center | Command::ScrollBy(_)) {
             self.ensure_visible_all();
         }
 
@@ -457,11 +475,37 @@ impl Engine {
         match self.backend.focus(id) {
             Ok(()) => {
                 self.stale_focus = previous.filter(|&p| p != id);
+                self.touch(id);
                 Ok(())
             }
             Err(BackendError::WindowNotFound(_)) => Ok(()),
             Err(err) => Err(err),
         }
+    }
+
+    /// Moves `id` to the front of the recently used list.
+    fn touch(&mut self, id: WindowId) {
+        if !self.info.contains_key(&id) {
+            return;
+        }
+        self.mru.retain(|&w| w != id);
+        self.mru.insert(0, id);
+    }
+
+    /// Focuses any managed window: tiled ones bring in their workspace,
+    /// scratch ones show the scratch layer.
+    fn focus_window(&mut self, id: WindowId, raise: &mut Vec<WindowId>) -> bool {
+        if self.scratch.iter().any(|&(w, _)| w == id) {
+            self.scratch_visible = true;
+            raise.push(id);
+            return true;
+        }
+        if !self.workspaces.iter().any(|w| w.contains(id)) {
+            return false;
+        }
+        self.follow_focus(id);
+        raise.push(id);
+        true
     }
 
     /// Makes the workspace holding `id` current and focuses `id` in it.
@@ -1030,6 +1074,69 @@ mod tests {
         backend.remove(2);
         engine.sync().unwrap();
         assert!(engine.state().scratch.is_empty());
+    }
+
+    #[test]
+    fn mru_tracks_focus_changes() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0), window(3, 200.0, 300.0)]);
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        engine.command(Command::FocusLeft).unwrap();
+        assert_eq!(engine.state().mru, vec![1, 2, 3]);
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        assert_eq!(engine.state().mru, vec![3, 1, 2]);
+        backend.remove(1);
+        engine.sync().unwrap();
+        assert_eq!(engine.state().mru, vec![3, 2]);
+    }
+
+    #[test]
+    fn focus_window_switches_workspace() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::MoveToWorkspace(3)).unwrap();
+        assert_eq!(engine.command(Command::FocusWindow(2)), Ok(true));
+        assert_eq!(shown(&engine), vec![3]);
+        assert_eq!(backend.focused_window(), Some(2));
+        assert_eq!(engine.command(Command::FocusWindow(99)), Ok(false));
+    }
+
+    #[test]
+    fn focus_window_shows_hidden_scratch_window() {
+        let (mut engine, backend) = engine_with_scratch();
+        engine.command(Command::ToggleScratch).unwrap();
+        assert_eq!(engine.command(Command::FocusWindow(2)), Ok(true));
+        assert!(engine.state().scratch_visible);
+        assert_eq!(backend.focused_window(), Some(2));
+    }
+
+    #[test]
+    fn scroll_by_pans_and_scroll_end_focuses_centre_column() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 600.0), window(2, 100.0, 600.0), window(3, 200.0, 600.0)]);
+        engine.sync().unwrap();
+        assert_eq!(engine.command(Command::ScrollBy(-10000.0)), Ok(true));
+        assert_eq!(backend.frame_of(1).unwrap().x, 8.0 + 500.0);
+        assert_eq!(engine.workspace(0).unwrap().focused_window(), Some(3));
+        assert_eq!(engine.command(Command::ScrollEnd), Ok(true));
+        assert_eq!(backend.focused_window(), Some(1));
+        assert_eq!(backend.frame_of(1).unwrap().x, 8.0);
+    }
+
+    #[test]
+    fn focus_first_and_last() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0), window(3, 200.0, 300.0)]);
+        engine.sync().unwrap();
+        assert_eq!(engine.command(Command::FocusFirst), Ok(true));
+        assert_eq!(backend.focused_window(), Some(1));
+        assert_eq!(engine.command(Command::FocusLast), Ok(true));
+        assert_eq!(backend.focused_window(), Some(3));
     }
 
     #[test]
