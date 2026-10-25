@@ -428,10 +428,27 @@ impl Engine {
         let mut new: Vec<(WindowId, Rect)> =
             self.info.values().filter(|w| !managed.contains(&w.id)).map(|w| (w.id, w.frame)).collect();
         new.sort_by(|a, b| a.1.x.total_cmp(&b.1.x).then(a.0.cmp(&b.0)));
+        // Only the frontmost app's windows take focus; a window popped up by
+        // an app in the background opens beside the focused column without
+        // moving focus or the strip.
+        let front = if new.is_empty() { None } else { self.backend.focused_app() };
+        // The window each touched workspace keeps focused.
+        let mut keep: HashMap<usize, Option<WindowId>> = HashMap::new();
         for (id, frame) in new {
             let monitor = self.monitor_at(frame).unwrap_or(self.active);
             let viewport = self.viewport(monitor);
-            self.workspaces[self.monitors[monitor].workspace].insert_window(id, frame.width, viewport);
+            let index = self.monitors[monitor].workspace;
+            let ws = &mut self.workspaces[index];
+            let kept = keep.entry(index).or_insert(ws.focused_window());
+            ws.insert_window(id, frame.width, viewport);
+            if front.is_some() && front == Some(self.info[&id].pid) {
+                *kept = Some(id);
+            }
+        }
+        for (index, id) in keep {
+            if let Some(id) = id {
+                self.workspaces[index].focus_window(id);
+            }
         }
 
         // Tiled windows on screen that the user or their app moved.
@@ -839,6 +856,9 @@ mod tests {
         fn focused_window(&self) -> Option<WindowId> {
             self.0.focused_window()
         }
+        fn focused_app(&self) -> Option<i32> {
+            self.0.focused_app()
+        }
         fn focus(&self, id: WindowId) -> Result<()> {
             self.0.focus(id)
         }
@@ -901,6 +921,53 @@ mod tests {
         engine.sync().unwrap();
         assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
         assert_eq!(backend.frame_of(2).unwrap().x, 316.0);
+    }
+
+    #[test]
+    fn background_app_window_keeps_focus_and_scroll() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 600.0), window(2, 100.0, 600.0)]);
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        // Focus on a dialog, which does not pin the strip's focus.
+        backend.add(WindowInfo { pid: 101, is_standard: false, ..window(9, 300.0, 200.0) });
+        backend.set_focused(Some(9));
+        engine.sync().unwrap();
+        let scroll = engine.workspace(0).unwrap().scroll();
+        let frame = backend.frame_of(1);
+
+        // App 103 is not frontmost.
+        backend.add(window(3, 900.0, 600.0));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![2]]);
+        assert_eq!(engine.workspace(0).unwrap().focused_window(), Some(1));
+        assert_eq!(engine.workspace(0).unwrap().scroll(), scroll);
+        assert_eq!(backend.frame_of(1), frame);
+        assert_eq!(backend.focused_window(), Some(9));
+
+        // Two at once keep their left-to-right order.
+        backend.add(window(4, 300.0, 300.0));
+        backend.add(window(5, 200.0, 300.0));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![5], vec![4], vec![3], vec![2]]);
+        assert_eq!(engine.workspace(0).unwrap().focused_window(), Some(1));
+    }
+
+    #[test]
+    fn frontmost_app_window_takes_focus() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 600.0), window(2, 100.0, 600.0)]);
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        backend.add(WindowInfo { pid: 101, is_standard: false, ..window(9, 300.0, 200.0) });
+        backend.set_focused(Some(9));
+        engine.sync().unwrap();
+
+        // Same app as the focused dialog.
+        backend.add(WindowInfo { pid: 101, ..window(3, 900.0, 600.0) });
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![2]]);
+        assert_eq!(engine.workspace(0).unwrap().focused_window(), Some(3));
     }
 
     #[test]
