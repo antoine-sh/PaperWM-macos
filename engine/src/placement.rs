@@ -26,12 +26,13 @@ pub fn frames(
         let column_rect = Rect::new(x, area.y + gap, column.width(), height);
         strip_x += column.width() + gap;
 
-        let rows = column.windows().len() as f64;
-        let row_height = ((height - gap * (rows - 1.0)) / rows).max(1.0);
+        let rows = height - gap * (column.windows().len() as f64 - 1.0);
         let park = needs_parking(column_rect, area, other_monitors);
+        let mut y = column_rect.y;
         for (i, &id) in column.windows().iter().enumerate() {
-            let rect =
-                Rect::new(column_rect.x, column_rect.y + i as f64 * (row_height + gap), column_rect.width, row_height);
+            let row_height = (rows * column.height_share(i)).max(1.0);
+            let rect = Rect::new(column_rect.x, y, column_rect.width, row_height);
+            y += row_height + gap;
             result.push((id, if park { parked(rect, area, other_monitors) } else { rect }));
         }
     }
@@ -114,6 +115,18 @@ mod tests {
         let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
         assert_eq!(frames[0], (1, Rect::new(10.0, 35.0, 400.0, 245.0)));
         assert_eq!(frames[1], (2, Rect::new(10.0, 290.0, 400.0, 245.0)));
+    }
+
+    #[test]
+    fn stacked_windows_take_their_share_of_the_height() {
+        let mut ws = workspace(&[400.0, 400.0]);
+        ws.focus_column(-1);
+        ws.consume();
+        // Rows share 490 points: 0.6 and 0.4 of it.
+        ws.resize_row(0.1, 500.0, GAP);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        assert_eq!(frames[0], (1, Rect::new(10.0, 35.0, 400.0, 294.0)));
+        assert_eq!(frames[1], (2, Rect::new(10.0, 339.0, 400.0, 196.0)));
     }
 
     #[test]

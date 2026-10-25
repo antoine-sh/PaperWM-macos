@@ -15,6 +15,9 @@ use crate::workspace::{CenterFocus, Workspace};
 /// Number of PaperWM workspaces.
 pub const WORKSPACE_COUNT: usize = 9;
 
+/// Share of a stacked column's height that one taller or shorter step moves.
+const HEIGHT_STEP: f64 = 0.1;
+
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -138,6 +141,11 @@ pub enum Command {
     ScrollEnd,
     FocusFirst,
     FocusLast,
+    /// Grows the focused window within its stacked column.
+    Taller,
+    Shorter,
+    /// Gives every window in the focused column the same height.
+    EqualHeights,
 }
 
 impl Command {
@@ -177,6 +185,9 @@ impl Command {
             28 => ScrollEnd,
             29 => FocusFirst,
             30 => FocusLast,
+            31 => Taller,
+            32 => Shorter,
+            33 => EqualHeights,
             _ => return None,
         })
     }
@@ -598,6 +609,7 @@ impl Engine {
         }
         let gap = self.config.gap;
         let viewport = self.viewport(self.active);
+        let column_height = self.monitors[self.active].area.height - 2.0 * gap;
         let current = self.monitors[self.active].workspace;
         let before = self.focused_window();
         // Set by commands that decide focus themselves.
@@ -647,6 +659,9 @@ impl Engine {
             }
             Command::FocusFirst => ws.focus_edge(false),
             Command::FocusLast => ws.focus_edge(true),
+            Command::Taller => ws.resize_row(HEIGHT_STEP, column_height, gap),
+            Command::Shorter => ws.resize_row(-HEIGHT_STEP, column_height, gap),
+            Command::EqualHeights => ws.equalize_rows(),
         };
         if !matches!(command, Command::Center | Command::ScrollBy(_)) {
             self.ensure_visible_all();
@@ -1152,6 +1167,24 @@ mod tests {
     }
 
     #[test]
+    fn stacked_window_heights_can_be_changed_and_equalized() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        let height = |id| backend.frame_of(id).unwrap().height.round();
+        assert_eq!(engine.command(Command::Taller), Ok(false));
+        engine.command(Command::FocusLeft).unwrap();
+        engine.command(Command::Consume).unwrap();
+        assert_eq!((height(1), height(2)), (288.0, 288.0));
+        assert_eq!(engine.command(Command::Taller), Ok(true));
+        assert_eq!((height(1), height(2)), (346.0, 230.0));
+        engine.command(Command::Shorter).unwrap();
+        engine.command(Command::Shorter).unwrap();
+        assert_eq!((height(1), height(2)), (230.0, 346.0));
+        assert_eq!(engine.command(Command::EqualHeights), Ok(true));
+        assert_eq!((height(1), height(2)), (288.0, 288.0));
+    }
+
+    #[test]
     fn unchanged_layout_does_not_move_windows_again() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0)]);
         engine.sync().unwrap();
@@ -1539,7 +1572,8 @@ mod tests {
     fn command_parsing_rejects_unknown_values() {
         assert_eq!(Command::parse(0, 0.0), Some(Command::FocusLeft));
         assert_eq!(Command::parse(12, 0.0), Some(Command::Expel));
-        assert_eq!(Command::parse(31, 0.0), None);
+        assert_eq!(Command::parse(33, 0.0), Some(Command::EqualHeights));
+        assert_eq!(Command::parse(34, 0.0), None);
     }
 
     #[test]
