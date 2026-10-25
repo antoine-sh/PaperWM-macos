@@ -107,6 +107,10 @@ PwmStatus pwm_engine_set_monitors(PwmEngine *engine, const PwmRect *areas, size_
 // Brings the layout up to date with the current windows and focus.
 PwmStatus pwm_engine_sync(PwmEngine *engine);
 
+// Syncs after a drag ended with the pointer at x, y (Accessibility
+// coordinates): a tiled window dragged there moves into the column under it.
+PwmStatus pwm_engine_drop(PwmEngine *engine, double x, double y);
+
 // Puts every window back in its place and syncs.
 PwmStatus pwm_engine_retile(PwmEngine *engine);
 
