@@ -180,27 +180,33 @@ struct SettingsView: View {
     }
 
     private var shortcuts: some View {
-        List(HotKey.defaults, id: \.id) { hotKey in
-            HStack {
-                Text(hotKey.title)
-                Spacer()
-                if failed.contains(hotKey.id) {
-                    Image(systemName: "exclamationmark.triangle")
-                        .foregroundStyle(.orange)
-                        .help("Another app uses this shortcut")
-                }
-                let combo = binding(for: hotKey)
-                Button(recorder.recording == hotKey.id ? "Press keys…" : combo.wrappedValue.symbol) {
-                    if recorder.recording == hotKey.id {
-                        recorder.stop()
-                    } else {
-                        recorder.start(hotKey.id) { combo.wrappedValue = $0 }
-                    }
-                }
-                .frame(minWidth: 110)
-                Button("Reset") { settings.values.shortcuts[hotKey.id] = nil }
-                    .disabled(settings.values.shortcuts[hotKey.id] == nil)
+        List(HotKey.Category.allCases, id: \.self) { category in
+            Section(category.rawValue) {
+                ForEach(HotKey.defaults.filter { $0.category == category }, id: \.id) { shortcutRow($0) }
             }
+        }
+    }
+
+    private func shortcutRow(_ hotKey: HotKey) -> some View {
+        HStack {
+            Text(hotKey.title)
+            Spacer()
+            if failed.contains(hotKey.id) {
+                Image(systemName: "exclamationmark.triangle")
+                    .foregroundStyle(.orange)
+                    .help("Another app uses this shortcut")
+            }
+            let combo = binding(for: hotKey)
+            Button(recorder.recording == hotKey.id ? "Press keys…" : combo.wrappedValue.symbol) {
+                if recorder.recording == hotKey.id {
+                    recorder.stop()
+                } else {
+                    recorder.start(hotKey.id) { combo.wrappedValue = $0 }
+                }
+            }
+            .frame(minWidth: 110)
+            Button("Reset") { settings.values.shortcuts[hotKey.id] = nil }
+                .disabled(settings.values.shortcuts[hotKey.id] == nil)
         }
     }
 

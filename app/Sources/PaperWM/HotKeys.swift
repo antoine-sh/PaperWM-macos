@@ -59,9 +59,21 @@ struct KeyCombo: Codable, Equatable {
 
 /// A global keyboard shortcut.
 struct HotKey {
+    /// Groups shortcuts in Settings and the README, in display order.
+    enum Category: String, CaseIterable {
+        case focus = "Focus and Move"
+        case workspaces = "Workspaces"
+        case monitors = "Monitors"
+        case size = "Size"
+        case layout = "Column Layout"
+        case switcher = "Switcher and Scratch Layer"
+        case appearance = "Appearance"
+    }
+
     /// Stable name used to store the user's override, e.g. "focus-left".
     let id: String
     let title: String
+    let category: Category
     let action: Action
     var combo: KeyCombo
 
@@ -70,73 +82,95 @@ struct HotKey {
         kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9,
     ]
 
-    /// PaperWM's default bindings, with ⌃⌥ standing in for Super and ⌃⌥⌘ for
-    /// Super+Ctrl.
+    /// PaperWM's bindings adapted to Mac keyboards, with ⌃⌥ standing in for
+    /// Super. Within a category a key focuses or switches and adding ⇧ takes
+    /// the window along (or gives the opposite or vertical variant). Every
+    /// key exists on laptop keyboards without Fn, and no shortcut needs more
+    /// than three modifiers.
     static let defaults: [HotKey] = {
         let base = controlKey | optionKey
         let shift = base | shiftKey
-        let ctrl = base | cmdKey
-        func key(_ id: String, _ title: String, _ keyCode: Int, _ modifiers: Int, _ action: Action) -> HotKey {
-            HotKey(id: id, title: title, action: action, combo: KeyCombo(keyCode: keyCode, modifiers: modifiers))
+        // id, title, key code, modifiers, action.
+        typealias Entry = (String, String, Int, Int, Action)
+        var all: [HotKey] = []
+        func add(_ category: Category, _ entries: [Entry]) {
+            for (id, title, keyCode, modifiers, action) in entries {
+                all.append(HotKey(id: id, title: title, category: category, action: action,
+                                  combo: KeyCombo(keyCode: keyCode, modifiers: modifiers)))
+            }
         }
-        var keys = [
-            key("focus-left", "Focus Left", kVK_LeftArrow, base, .engine(PWM_COMMAND_FOCUS_LEFT)),
-            key("focus-right", "Focus Right", kVK_RightArrow, base, .engine(PWM_COMMAND_FOCUS_RIGHT)),
-            key("focus-up", "Focus Up", kVK_UpArrow, base, .engine(PWM_COMMAND_FOCUS_UP)),
-            key("focus-down", "Focus Down", kVK_DownArrow, base, .engine(PWM_COMMAND_FOCUS_DOWN)),
-            key("focus-first", "Focus First Column", kVK_Home, base, .engine(PWM_COMMAND_FOCUS_FIRST)),
-            key("focus-last", "Focus Last Column", kVK_End, base, .engine(PWM_COMMAND_FOCUS_LAST)),
-            key("move-left", "Move Column Left", kVK_LeftArrow, shift, .engine(PWM_COMMAND_MOVE_LEFT)),
-            key("move-right", "Move Column Right", kVK_RightArrow, shift, .engine(PWM_COMMAND_MOVE_RIGHT)),
-            key("move-up", "Move Window Up", kVK_UpArrow, shift, .engine(PWM_COMMAND_MOVE_UP)),
-            key("move-down", "Move Window Down", kVK_DownArrow, shift, .engine(PWM_COMMAND_MOVE_DOWN)),
-            key("cycle-width", "Cycle Column Width", kVK_ANSI_R, base, .engine(PWM_COMMAND_CYCLE_WIDTH)),
-            key("widen-column", "Widen Column", kVK_ANSI_Equal, base, .engine(PWM_COMMAND_WIDEN_COLUMN)),
-            key("narrow-column", "Narrow Column", kVK_ANSI_Minus, base, .engine(PWM_COMMAND_NARROW_COLUMN)),
-            key("full-width", "Toggle Full Width", kVK_ANSI_F, base, .engine(PWM_COMMAND_TOGGLE_FULL_WIDTH)),
-            key("center", "Center Column", kVK_ANSI_C, base, .engine(PWM_COMMAND_CENTER)),
-            key("consume", "Pull Next Window into Column", kVK_ANSI_I, base, .engine(PWM_COMMAND_CONSUME)),
-            key("expel", "Push Window out of Column", kVK_ANSI_O, base, .engine(PWM_COMMAND_EXPEL)),
-            key("toggle-tabbed", "Toggle Tabbed Column", kVK_ANSI_T, shift, .engine(PWM_COMMAND_TOGGLE_TABBED)),
-            key("pin-left", "Pin Column to Left Edge", kVK_ANSI_P, base, .engine(PWM_COMMAND_TOGGLE_PIN_LEFT)),
-            key("pin-right", "Pin Column to Right Edge", kVK_ANSI_P, shift, .engine(PWM_COMMAND_TOGGLE_PIN_RIGHT)),
-            key("taller", "Make Window Taller", kVK_ANSI_Equal, shift, .engine(PWM_COMMAND_TALLER)),
-            key("shorter", "Make Window Shorter", kVK_ANSI_Minus, shift, .engine(PWM_COMMAND_SHORTER)),
-            key("equal-heights", "Equalize Window Heights", kVK_ANSI_0, base, .engine(PWM_COMMAND_EQUAL_HEIGHTS)),
-            key("switcher", "Switch Windows", kVK_Tab, base, .switcher(forward: true)),
-            key("switcher-back", "Switch Windows Backwards", kVK_Tab, shift, .switcher(forward: false)),
-            key("next-workspace", "Next Workspace", kVK_PageDown, base, .engine(PWM_COMMAND_NEXT_WORKSPACE)),
-            key("previous-workspace", "Previous Workspace", kVK_PageUp, base,
-                .engine(PWM_COMMAND_PREVIOUS_WORKSPACE)),
-            key("last-workspace", "Last Used Workspace", kVK_ANSI_Grave, base, .engine(PWM_COMMAND_LAST_WORKSPACE)),
-            key("move-to-next-workspace", "Move Window to Next Workspace", kVK_PageDown, shift,
-                .engine(PWM_COMMAND_MOVE_TO_NEXT_WORKSPACE)),
-            key("move-to-previous-workspace", "Move Window to Previous Workspace", kVK_PageUp, shift,
-                .engine(PWM_COMMAND_MOVE_TO_PREVIOUS_WORKSPACE)),
-            key("focus-monitor-left", "Focus Monitor Left", kVK_LeftArrow, ctrl,
-                .engine(PWM_COMMAND_FOCUS_MONITOR_LEFT)),
-            key("focus-monitor-right", "Focus Monitor Right", kVK_RightArrow, ctrl,
-                .engine(PWM_COMMAND_FOCUS_MONITOR_RIGHT)),
-            key("move-to-monitor-left", "Move Window to Monitor Left", kVK_LeftArrow, ctrl | shiftKey,
-                .engine(PWM_COMMAND_MOVE_TO_MONITOR_LEFT)),
-            key("move-to-monitor-right", "Move Window to Monitor Right", kVK_RightArrow, ctrl | shiftKey,
-                .engine(PWM_COMMAND_MOVE_TO_MONITOR_RIGHT)),
-            key("toggle-scratch", "Show or Hide Scratch Layer", kVK_Escape, base,
-                .engine(PWM_COMMAND_TOGGLE_SCRATCH)),
-            key("move-to-scratch", "Move Window to or from Scratch Layer", kVK_Escape, shift,
-                .engine(PWM_COMMAND_MOVE_TO_SCRATCH)),
-            key("toggle-border", "Show or Hide Focus Border", kVK_ANSI_B, base, .toggle(\.focusBorder)),
-            key("toggle-dim", "Dim Background Windows", kVK_ANSI_D, base, .toggle(\.dimBackground)),
-        ]
-        for n in 1...Int(PWM_WORKSPACE_COUNT) {
-            keys.append(key("switch-workspace-\(n)", "Switch to Workspace \(n)", digitKeys[n], base,
-                            .engine(PWM_COMMAND_SWITCH_WORKSPACE, Double(n - 1))))
-        }
-        for n in 1...Int(PWM_WORKSPACE_COUNT) {
-            keys.append(key("move-to-workspace-\(n)", "Move Window to Workspace \(n)", digitKeys[n], shift,
-                            .engine(PWM_COMMAND_MOVE_TO_WORKSPACE, Double(n - 1))))
-        }
-        return keys
+        let workspaces = 1...Int(PWM_WORKSPACE_COUNT)
+        add(.focus, [
+            ("focus-left", "Focus Left", kVK_LeftArrow, base, .engine(PWM_COMMAND_FOCUS_LEFT)),
+            ("focus-right", "Focus Right", kVK_RightArrow, base, .engine(PWM_COMMAND_FOCUS_RIGHT)),
+            ("focus-up", "Focus Up", kVK_UpArrow, base, .engine(PWM_COMMAND_FOCUS_UP)),
+            ("focus-down", "Focus Down", kVK_DownArrow, base, .engine(PWM_COMMAND_FOCUS_DOWN)),
+            // ⌘ for "all the way", as ⌘← jumps to the start of a line.
+            ("focus-first", "Focus First Column", kVK_LeftArrow, base | cmdKey, .engine(PWM_COMMAND_FOCUS_FIRST)),
+            ("focus-last", "Focus Last Column", kVK_RightArrow, base | cmdKey, .engine(PWM_COMMAND_FOCUS_LAST)),
+            ("move-left", "Move Column Left", kVK_LeftArrow, shift, .engine(PWM_COMMAND_MOVE_LEFT)),
+            ("move-right", "Move Column Right", kVK_RightArrow, shift, .engine(PWM_COMMAND_MOVE_RIGHT)),
+            ("move-up", "Move Window Up", kVK_UpArrow, shift, .engine(PWM_COMMAND_MOVE_UP)),
+            ("move-down", "Move Window Down", kVK_DownArrow, shift, .engine(PWM_COMMAND_MOVE_DOWN)),
+        ])
+        add(.workspaces, workspaces.map { n -> Entry in
+            ("switch-workspace-\(n)", "Switch to Workspace \(n)", digitKeys[n], base,
+             .engine(PWM_COMMAND_SWITCH_WORKSPACE, Double(n - 1)))
+        })
+        add(.workspaces, workspaces.map { n -> Entry in
+            ("move-to-workspace-\(n)", "Move Window to Workspace \(n)", digitKeys[n], shift,
+             .engine(PWM_COMMAND_MOVE_TO_WORKSPACE, Double(n - 1)))
+        })
+        add(.workspaces, [
+            ("previous-workspace", "Previous Workspace", kVK_ANSI_LeftBracket, base,
+             .engine(PWM_COMMAND_PREVIOUS_WORKSPACE)),
+            ("next-workspace", "Next Workspace", kVK_ANSI_RightBracket, base, .engine(PWM_COMMAND_NEXT_WORKSPACE)),
+            ("move-to-previous-workspace", "Move Window to Previous Workspace", kVK_ANSI_LeftBracket, shift,
+             .engine(PWM_COMMAND_MOVE_TO_PREVIOUS_WORKSPACE)),
+            ("move-to-next-workspace", "Move Window to Next Workspace", kVK_ANSI_RightBracket, shift,
+             .engine(PWM_COMMAND_MOVE_TO_NEXT_WORKSPACE)),
+            ("last-workspace", "Last Used Workspace", kVK_ANSI_Grave, base, .engine(PWM_COMMAND_LAST_WORKSPACE)),
+        ])
+        // , and . carry < and >.
+        add(.monitors, [
+            ("focus-monitor-left", "Focus Monitor Left", kVK_ANSI_Comma, base,
+             .engine(PWM_COMMAND_FOCUS_MONITOR_LEFT)),
+            ("focus-monitor-right", "Focus Monitor Right", kVK_ANSI_Period, base,
+             .engine(PWM_COMMAND_FOCUS_MONITOR_RIGHT)),
+            ("move-to-monitor-left", "Move Window to Monitor Left", kVK_ANSI_Comma, shift,
+             .engine(PWM_COMMAND_MOVE_TO_MONITOR_LEFT)),
+            ("move-to-monitor-right", "Move Window to Monitor Right", kVK_ANSI_Period, shift,
+             .engine(PWM_COMMAND_MOVE_TO_MONITOR_RIGHT)),
+        ])
+        add(.size, [
+            ("cycle-width", "Cycle Column Width", kVK_ANSI_R, base, .engine(PWM_COMMAND_CYCLE_WIDTH)),
+            ("full-width", "Toggle Full Width", kVK_ANSI_F, base, .engine(PWM_COMMAND_TOGGLE_FULL_WIDTH)),
+            ("widen-column", "Widen Column", kVK_ANSI_Equal, base, .engine(PWM_COMMAND_WIDEN_COLUMN)),
+            ("narrow-column", "Narrow Column", kVK_ANSI_Minus, base, .engine(PWM_COMMAND_NARROW_COLUMN)),
+            ("taller", "Make Window Taller", kVK_ANSI_Equal, shift, .engine(PWM_COMMAND_TALLER)),
+            ("shorter", "Make Window Shorter", kVK_ANSI_Minus, shift, .engine(PWM_COMMAND_SHORTER)),
+            ("equal-heights", "Equalize Window Heights", kVK_ANSI_E, base, .engine(PWM_COMMAND_EQUAL_HEIGHTS)),
+        ])
+        add(.layout, [
+            ("center", "Center Column", kVK_ANSI_C, base, .engine(PWM_COMMAND_CENTER)),
+            ("consume", "Pull Next Window into Column", kVK_ANSI_I, base, .engine(PWM_COMMAND_CONSUME)),
+            ("expel", "Push Window out of Column", kVK_ANSI_O, base, .engine(PWM_COMMAND_EXPEL)),
+            ("toggle-tabbed", "Toggle Tabbed Column", kVK_ANSI_T, base, .engine(PWM_COMMAND_TOGGLE_TABBED)),
+            ("pin-left", "Pin Column to Left Edge", kVK_ANSI_P, base, .engine(PWM_COMMAND_TOGGLE_PIN_LEFT)),
+            ("pin-right", "Pin Column to Right Edge", kVK_ANSI_P, shift, .engine(PWM_COMMAND_TOGGLE_PIN_RIGHT)),
+        ])
+        add(.switcher, [
+            ("switcher", "Switch Windows", kVK_Tab, base, .switcher(forward: true)),
+            ("switcher-back", "Switch Windows Backwards", kVK_Tab, shift, .switcher(forward: false)),
+            ("toggle-scratch", "Show or Hide Scratch Layer", kVK_Escape, base, .engine(PWM_COMMAND_TOGGLE_SCRATCH)),
+            ("move-to-scratch", "Move Window to or from Scratch Layer", kVK_Escape, shift,
+             .engine(PWM_COMMAND_MOVE_TO_SCRATCH)),
+        ])
+        add(.appearance, [
+            ("toggle-border", "Show or Hide Focus Border", kVK_ANSI_B, base, .toggle(\.focusBorder)),
+            ("toggle-dim", "Dim Background Windows", kVK_ANSI_D, base, .toggle(\.dimBackground)),
+        ])
+        return all
     }()
 }
 
