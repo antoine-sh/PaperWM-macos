@@ -185,16 +185,6 @@ struct ToolbarView: View {
         guard column.x + column.width > workspace.scroll, column.x < workspace.scroll + monitor.viewport else {
             return false
         }
-        // The focused column is never parked under a pin, even when wider than the room beside them.
-        if column.pinned != nil || index == workspace.focusedColumn {
-            return true
-        }
-        return workspace.columns.allSatisfy { pin in
-            switch pin.pinned {
-            case "left"?: return column.x >= pin.x + pin.width
-            case "right"?: return column.x + column.width <= pin.x
-            default: return true
-            }
-        }
+        return index == workspace.focusedColumn || !workspace.isUnderPin(column)
     }
 }

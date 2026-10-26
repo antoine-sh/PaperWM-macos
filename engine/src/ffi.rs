@@ -470,6 +470,7 @@ mod tests {
             ("FOCUS_LAST", Command::FocusLast),
             ("WIDEN_COLUMN", Command::WidenColumn),
             ("NARROW_COLUMN", Command::NarrowColumn),
+            ("TOGGLE_TABBED", Command::ToggleTabbed),
             ("TOGGLE_PIN_LEFT", Command::TogglePinLeft),
             ("TOGGLE_PIN_RIGHT", Command::TogglePinRight),
         ];

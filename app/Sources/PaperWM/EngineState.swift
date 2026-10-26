@@ -23,6 +23,8 @@ struct EngineState: Decodable {
         let width: Double
         let windows: [UInt32]
         let focusedRow: Int
+        /// Only the focused window shows, with a tab bar for the column.
+        let tabbed: Bool
         /// "left" or "right" when pinned to that screen edge; `x` is then where it is shown.
         let pinned: String?
     }
@@ -32,6 +34,17 @@ struct EngineState: Decodable {
         let scroll: Double
         let focusedColumn: Int
         let columns: [Column]
+
+        /// Whether `column` reaches under a pin, where the engine parks it unless it is focused.
+        func isUnderPin(_ column: Column) -> Bool {
+            column.pinned == nil && columns.contains { pin in
+                switch pin.pinned {
+                case "left"?: return column.x < pin.x + pin.width
+                case "right"?: return column.x + column.width > pin.x
+                default: return false
+                }
+            }
+        }
     }
 
     struct Window: Decodable {

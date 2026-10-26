@@ -33,7 +33,8 @@ pub fn frames(
         let column_rect = Rect::new(x, area.y + gap, column.width(), height);
         strip_x += column.width() + gap;
 
-        let rows = column.windows().len() as f64;
+        // A tabbed column lays its windows on top of each other.
+        let rows = if column.is_tabbed() { 1.0 } else { column.windows().len() as f64 };
         let row_height = ((height - gap * (rows - 1.0)) / rows).max(1.0);
         // The focused column always shows, even when wider than the room between the pins.
         let under_pin = column.pinned().is_none()
@@ -41,8 +42,9 @@ pub fn frames(
             && ((lead > 0.0 && x < area.x + lead) || (trail > 0.0 && column_rect.max_x() > area.max_x() - trail));
         let park = under_pin || needs_parking(column_rect, area, other_monitors);
         for (i, &id) in column.windows().iter().enumerate() {
+            let row = if column.is_tabbed() { 0.0 } else { i as f64 };
             let rect =
-                Rect::new(column_rect.x, column_rect.y + i as f64 * (row_height + gap), column_rect.width, row_height);
+                Rect::new(column_rect.x, column_rect.y + row * (row_height + gap), column_rect.width, row_height);
             result.push((id, if park { parked(rect, area, other_monitors) } else { rect }));
         }
     }
@@ -125,6 +127,17 @@ mod tests {
         let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
         assert_eq!(frames[0], (1, Rect::new(10.0, 35.0, 400.0, 245.0)));
         assert_eq!(frames[1], (2, Rect::new(10.0, 290.0, 400.0, 245.0)));
+    }
+
+    #[test]
+    fn tabbed_column_gives_every_window_the_full_column() {
+        let mut ws = workspace(&[400.0, 400.0]);
+        ws.focus_column(-1);
+        ws.consume();
+        ws.toggle_tabbed();
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        assert_eq!(frames[0], (1, Rect::new(10.0, 35.0, 400.0, 500.0)));
+        assert_eq!(frames[1], (2, Rect::new(10.0, 35.0, 400.0, 500.0)));
     }
 
     #[test]

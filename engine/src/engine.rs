@@ -147,6 +147,8 @@ pub enum Command {
     /// Widens the focused column by `Config::width_step` of the screen.
     WidenColumn,
     NarrowColumn,
+    /// Switches the focused column between stacked and tabbed.
+    ToggleTabbed,
     /// Pins the focused column to the left edge, or unpins it.
     TogglePinLeft,
     /// Pins the focused column to the right edge, or unpins it.
@@ -192,8 +194,9 @@ impl Command {
             30 => FocusLast,
             31 => WidenColumn,
             32 => NarrowColumn,
-            33 => TogglePinLeft,
-            34 => TogglePinRight,
+            33 => ToggleTabbed,
+            34 => TogglePinLeft,
+            35 => TogglePinRight,
             _ => return None,
         })
     }
@@ -239,6 +242,8 @@ pub struct ColumnState {
     pub width: f64,
     pub windows: Vec<WindowId>,
     pub focused_row: usize,
+    /// Only the focused window shows; the UI draws a tab bar for the rest.
+    pub tabbed: bool,
     /// The edge the column is pinned to, if any; its `x` is where it is shown.
     pub pinned: Option<Pin>,
 }
@@ -381,6 +386,7 @@ impl Engine {
                             width: c.width(),
                             windows: c.windows().to_vec(),
                             focused_row: c.focused_row(),
+                            tabbed: c.is_tabbed(),
                             pinned: c.pinned(),
                         })
                         .collect(),
@@ -668,8 +674,24 @@ impl Engine {
             Command::MoveDown => ws.move_row(1),
             Command::CycleWidth => ws.cycle_width(&self.config.width_presets, viewport, gap),
             Command::ToggleFullWidth => ws.toggle_full_width(viewport),
-            Command::Consume => ws.consume(),
-            Command::Expel => ws.expel(),
+            Command::Consume => {
+                let changed = ws.consume();
+                // The pulled-in window may have come up above the active tab.
+                if changed && ws.columns()[ws.focused_column()].is_tabbed() {
+                    raise.extend(ws.focused_window());
+                }
+                changed
+            }
+            Command::Expel => {
+                let changed = ws.expel();
+                let source = &ws.columns()[ws.focused_column().saturating_sub(1)];
+                // The expelled window was the tab in front; bring up the one now active.
+                if changed && source.is_tabbed() {
+                    raise.push(source.focused_window());
+                    raise.extend(ws.focused_window());
+                }
+                changed
+            }
             Command::Center => {
                 ws.center_focused(viewport, gap);
                 true
@@ -703,6 +725,11 @@ impl Engine {
             Command::FocusLast => ws.focus_edge(true),
             Command::WidenColumn => ws.nudge_width(self.config.width_step * viewport, viewport),
             Command::NarrowColumn => ws.nudge_width(-self.config.width_step * viewport, viewport),
+            Command::ToggleTabbed => {
+                // Brings the active tab in front of the windows now behind it.
+                raise.extend(ws.focused_window());
+                ws.toggle_tabbed()
+            }
             Command::TogglePinLeft => ws.toggle_pin(Pin::Left, viewport, gap),
             Command::TogglePinRight => ws.toggle_pin(Pin::Right, viewport, gap),
         };
@@ -1297,6 +1324,51 @@ mod tests {
         engine.command(Command::FocusDown).unwrap();
         engine.command(Command::Expel).unwrap();
         assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![2]]);
+    }
+
+    #[test]
+    fn tabbed_column_shows_one_window_at_full_height_and_focus_switches_tabs() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::FocusLeft).unwrap();
+        engine.command(Command::Consume).unwrap();
+        engine.command(Command::FocusDown).unwrap();
+        backend.set_focused(Some(1));
+        assert_eq!(engine.command(Command::ToggleTabbed), Ok(true));
+        let full = Rect::new(8.0, 33.0, 300.0, 584.0);
+        assert_eq!(backend.frame_of(1), Some(full));
+        assert_eq!(backend.frame_of(2), Some(full));
+        // Toggling raises the active tab above the others.
+        assert_eq!(backend.focused_window(), Some(2));
+        assert!(engine.state().workspaces[0].columns[0].tabbed);
+
+        assert_eq!(engine.command(Command::FocusUp), Ok(true));
+        assert_eq!(backend.focused_window(), Some(1));
+        assert_eq!(engine.command(Command::FocusUp), Ok(false));
+
+        engine.command(Command::ToggleTabbed).unwrap();
+        assert!(!engine.state().workspaces[0].columns[0].tabbed);
+        assert_eq!(backend.frame_of(1).unwrap().height, 288.0);
+    }
+
+    #[test]
+    fn tabbed_column_keeps_its_active_tab_in_front_through_consume_and_expel() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0), window(3, 200.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::FocusFirst).unwrap();
+        engine.command(Command::ToggleTabbed).unwrap();
+        let before = backend.raised().len();
+        engine.command(Command::Consume).unwrap();
+        // The pulled-in window must not stay above the active tab.
+        assert_eq!(backend.raised()[before..], [1]);
+        engine.command(Command::Consume).unwrap();
+        engine.command(Command::FocusDown).unwrap();
+        engine.command(Command::Expel).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1, 3], vec![2]]);
+        // The column's new active tab comes to the front, then the expelled window takes focus.
+        assert_eq!(backend.raised()[backend.raised().len() - 2..], [3, 2]);
+        assert_eq!(backend.focused_window(), Some(2));
     }
 
     #[test]
