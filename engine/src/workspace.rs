@@ -288,7 +288,8 @@ impl Workspace {
         let row = column.focused_row;
         let others = 1.0 - shares[row];
         let spare = others - min * (n - 1) as f64;
-        let delta = if step > 0.0 { step.min(spare) } else { step.max(min - shares[row]) };
+        // Shares set on a taller monitor can sit below `min`; never resize the wrong way.
+        let delta = if step > 0.0 { step.min(spare).max(0.0) } else { step.max(min - shares[row]).min(0.0) };
         if delta.abs() < 1e-9 {
             return false;
         }
@@ -838,6 +839,23 @@ mod tests {
         ws.resize_row(0.1, 900.0, GAP);
         ws.remove_window(3);
         assert_eq!(shares(&ws), vec![1.0]);
+    }
+
+    #[test]
+    fn resizing_never_goes_the_wrong_way_below_the_minimum() {
+        let mut ws = workspace(&[300.0, 300.0]);
+        ws.focus_column(-1);
+        ws.consume();
+        for _ in 0..10 {
+            ws.resize_row(0.1, 900.0, GAP);
+        }
+        assert_eq!(shares(&ws), vec![0.888, 0.112]);
+        // On a shorter monitor the 100 point minimum is 0.345 of the column,
+        // more than window 2 has, so neither may move towards it.
+        assert!(!ws.resize_row(0.1, 300.0, GAP));
+        ws.focus_row(1);
+        assert!(!ws.resize_row(-0.1, 300.0, GAP));
+        assert_eq!(shares(&ws), vec![0.888, 0.112]);
     }
 
     #[test]
