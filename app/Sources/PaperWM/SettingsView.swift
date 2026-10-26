@@ -144,7 +144,9 @@ struct SettingsView: View {
         return LabeledContent(title) {
             HStack {
                 Text(shown).monospacedDigit()
-                Stepper(title, value: value, in: range, step: step).labelsHidden()
+                Stepper(title, value: value, in: range, step: step)
+                    .labelsHidden()
+                    .accessibilityValue(shown)
             }
         }
     }
