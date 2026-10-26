@@ -138,6 +138,8 @@ pub enum Command {
     ScrollEnd,
     FocusFirst,
     FocusLast,
+    /// Switches the focused column between stacked and tabbed.
+    ToggleTabbed,
 }
 
 impl Command {
@@ -177,6 +179,7 @@ impl Command {
             28 => ScrollEnd,
             29 => FocusFirst,
             30 => FocusLast,
+            31 => ToggleTabbed,
             _ => return None,
         })
     }
@@ -222,6 +225,8 @@ pub struct ColumnState {
     pub width: f64,
     pub windows: Vec<WindowId>,
     pub focused_row: usize,
+    /// Only the focused window shows; the UI draws a tab bar for the rest.
+    pub tabbed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -360,6 +365,7 @@ impl Engine {
                         width: c.width(),
                         windows: c.windows().to_vec(),
                         focused_row: c.focused_row(),
+                        tabbed: c.is_tabbed(),
                     })
                     .collect(),
             })
@@ -647,6 +653,11 @@ impl Engine {
             }
             Command::FocusFirst => ws.focus_edge(false),
             Command::FocusLast => ws.focus_edge(true),
+            Command::ToggleTabbed => {
+                // Brings the active tab in front of the windows now behind it.
+                raise.extend(ws.focused_window());
+                ws.toggle_tabbed()
+            }
         };
         if !matches!(command, Command::Center | Command::ScrollBy(_)) {
             self.ensure_visible_all();
@@ -1152,6 +1163,31 @@ mod tests {
     }
 
     #[test]
+    fn tabbed_column_shows_one_window_at_full_height_and_focus_switches_tabs() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::FocusLeft).unwrap();
+        engine.command(Command::Consume).unwrap();
+        engine.command(Command::FocusDown).unwrap();
+        backend.set_focused(Some(1));
+        assert_eq!(engine.command(Command::ToggleTabbed), Ok(true));
+        let full = Rect::new(8.0, 33.0, 300.0, 584.0);
+        assert_eq!(backend.frame_of(1), Some(full));
+        assert_eq!(backend.frame_of(2), Some(full));
+        // Toggling raises the active tab above the others.
+        assert_eq!(backend.focused_window(), Some(2));
+        assert!(engine.state().workspaces[0].columns[0].tabbed);
+
+        assert_eq!(engine.command(Command::FocusUp), Ok(true));
+        assert_eq!(backend.focused_window(), Some(1));
+        assert_eq!(engine.command(Command::FocusUp), Ok(false));
+
+        engine.command(Command::ToggleTabbed).unwrap();
+        assert!(!engine.state().workspaces[0].columns[0].tabbed);
+        assert_eq!(backend.frame_of(1).unwrap().height, 288.0);
+    }
+
+    #[test]
     fn unchanged_layout_does_not_move_windows_again() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0)]);
         engine.sync().unwrap();
@@ -1539,7 +1575,7 @@ mod tests {
     fn command_parsing_rejects_unknown_values() {
         assert_eq!(Command::parse(0, 0.0), Some(Command::FocusLeft));
         assert_eq!(Command::parse(12, 0.0), Some(Command::Expel));
-        assert_eq!(Command::parse(31, 0.0), None);
+        assert_eq!(Command::parse(32, 0.0), None);
     }
 
     #[test]
