@@ -20,7 +20,7 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 - **Focus highlight**: optionally draw a colored border around the focused window and dim the windows behind it. Both are off by default; turn them on from the menu, Settings or their shortcuts. With Screen Recording permission the border matches each window's own rounded corners; otherwise it uses the corner radius set in Settings.
 - **App rules**: in Settings › Apps, pick an app from the running ones (or from the Applications folder) and either float it, so its windows are never tiled or moved and stay on every workspace like dialogs, or give it a fixed slot: its windows open at a set column of a set workspace. Apps are matched by name.
 - **Menu bar**: shows the current workspace's name; the menu switches workspaces, toggles the focus border and dimming, and opens Settings.
-- **Settings** (⌘, from the menu): gaps, column width presets, scroll animation length (0 turns it off), whether to keep the focused column centred (never, when the columns overflow the screen, or always), workspace names, app rules, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
+- **Settings** (⌘, from the menu): gaps, column width presets, the widen / narrow step, scroll animation length (0 turns it off), whether to keep the focused column centred (never, when the columns overflow the screen, or always), workspace names, app rules, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
 
 ### Keyboard shortcuts
 
@@ -34,6 +34,7 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 | ⌃⌥⇧ ← / → | Move the column left / right |
 | ⌃⌥⇧ ↑ / ↓ | Move the window up / down in its column |
 | ⌃⌥ R | Cycle column width (⅓, ½, ⅔ of the screen) |
+| ⌃⌥ = / - | Widen / narrow the column (by 10% of the screen; set the step in Settings) |
 | ⌃⌥ F | Toggle full width |
 | ⌃⌥ C | Center the column |
 | ⌃⌥ I | Pull the next column's window into this column |
