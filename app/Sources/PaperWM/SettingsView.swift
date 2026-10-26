@@ -4,7 +4,7 @@ import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
 
-/// The Settings window: layout, workspace names, app rules and shortcuts.
+/// The Settings window: general, layout, appearance, app rules and shortcuts.
 struct SettingsView: View {
     @ObservedObject var settings: Settings
     /// Shortcut ids macOS refused to register.
@@ -12,17 +12,19 @@ struct SettingsView: View {
     @ObservedObject var recorder: ShortcutRecorder
 
     @State private var presetsText = ""
+    @FocusState private var presetsFocused: Bool
     /// Read from macOS rather than stored, so it follows changes made in System Settings › Login Items.
     @State private var launchAtLogin = Self.isLaunchAtLogin
 
     var body: some View {
         TabView {
-            layout.tabItem { Text("Layout") }
-            appearance.tabItem { Text("Appearance") }
-            apps.tabItem { Text("Apps") }
-            shortcuts.tabItem { Text("Shortcuts") }
+            general.tabItem { Label("General", systemImage: "gearshape") }
+            layout.tabItem { Label("Layout", systemImage: "rectangle.split.3x1") }
+            appearance.tabItem { Label("Appearance", systemImage: "paintbrush") }
+            apps.tabItem { Label("Apps", systemImage: "app.badge") }
+            shortcuts.tabItem { Label("Shortcuts", systemImage: "keyboard") }
         }
-        .padding()
+        .formStyle(.grouped)
         .frame(width: 620, height: 520)
         .onAppear {
             presetsText = Self.format(settings.values.widthPresets)
@@ -35,40 +37,20 @@ struct SettingsView: View {
         [.enabled, .requiresApproval].contains(SMAppService.mainApp.status)
     }
 
-    private var layout: some View {
+    private var general: some View {
         Form {
-            Toggle("Launch at login", isOn: Binding(
-                get: { launchAtLogin },
-                set: { on in
-                    do {
-                        try on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
-                    } catch {
-                        NSLog("PaperWM: launch at login: \(error)")
+            Section {
+                Toggle("Launch at login", isOn: Binding(
+                    get: { launchAtLogin },
+                    set: { on in
+                        do {
+                            try on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+                        } catch {
+                            NSLog("PaperWM: launch at login: \(error)")
+                        }
+                        launchAtLogin = Self.isLaunchAtLogin
                     }
-                    launchAtLogin = Self.isLaunchAtLogin
-                }
-            ))
-            Stepper("Gap: \(Int(settings.values.gap)) pt", value: $settings.values.gap, in: 0...64, step: 2)
-            Stepper("Scroll animation: \(Int((settings.values.animationDuration * 1000).rounded())) ms",
-                    value: $settings.values.animationDuration, in: 0...1, step: 0.05)
-            Picker("Center focused column", selection: $settings.values.centerFocused) {
-                Text("Never").tag(CenterFocus.never)
-                Text("When columns overflow the screen").tag(CenterFocus.onOverflow)
-                Text("Always").tag(CenterFocus.always)
-            }
-            Toggle("Keep original height of single windows", isOn: $settings.values.keepOriginalHeight)
-            TextField("Column widths (% of screen)", text: $presetsText)
-                .onSubmit {
-                    if let presets = Self.parse(presetsText) { settings.values.widthPresets = presets }
-                    presetsText = Self.format(settings.values.widthPresets)
-                }
-            Stepper("Widen / narrow step: \(Int((settings.values.widthStep * 100).rounded()))% of screen",
-                    value: $settings.values.widthStep, in: 0.05...0.5, step: 0.05)
-            Stepper("Taller / shorter step: \(Int((settings.values.heightStep * 100).rounded()))% of column",
-                    value: $settings.values.heightStep, in: 0.05...0.5, step: 0.05)
-            Picker("Minimap", selection: $settings.values.minimapStyle) {
-                Text("Strip").tag(MinimapStyle.strip)
-                Text("App icon toolbar").tag(MinimapStyle.toolbar)
+                ))
             }
             Section("Workspace names") {
                 ForEach(0..<settings.values.workspaceNames.count, id: \.self) { index in
@@ -78,28 +60,99 @@ struct SettingsView: View {
         }
     }
 
-    private var appearance: some View {
+    private var layout: some View {
         Form {
-            Section("Focused window") {
-                Toggle("Draw a border around the focused window", isOn: $settings.values.focusBorder)
-                ColorPicker("Border color", selection: borderColor, supportsOpacity: false)
-                Stepper("Border width: \(Int(settings.values.borderWidth)) pt", value: $settings.values.borderWidth,
-                        in: 1...16)
-                Stepper("Corner radius: \(Int(settings.values.cornerRadius)) pt",
-                        value: $settings.values.cornerRadius, in: 0...40)
-                Text(Thumbnails.hasAccess
-                     ? "Each window's own corners are measured; this is used until then."
-                     : "Grant Screen Recording permission to match each window's own corners.")
+            Section {
+                stepper("Gap", value: $settings.values.gap, in: 0...64, step: 2) { "\(Int($0)) pt" }
+                TextField("Width presets", text: $presetsText)
+                    .focused($presetsFocused)
+                    .onSubmit { commitPresets() }
+                    .onChange(of: presetsFocused) { _, focused in if !focused { commitPresets() } }
+                stepper("Widen / narrow step", value: $settings.values.widthStep, in: 0.05...0.5, step: 0.05) {
+                    "\(Self.percent($0)) of screen"
+                }
+                stepper("Taller / shorter step", value: $settings.values.heightStep, in: 0.05...0.5, step: 0.05) {
+                    "\(Self.percent($0)) of column"
+                }
+                Toggle("Keep original height of single windows", isOn: $settings.values.keepOriginalHeight)
+            } header: {
+                Text("Columns")
+            } footer: {
+                Text("Width presets are percentages of the screen, separated by commas.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            Section("Background windows") {
-                Toggle("Dim windows behind the focused one", isOn: $settings.values.dimBackground)
-                Slider(value: $settings.values.dimAmount, in: 0.05...0.8) {
-                    Text("Dim: \(Int((settings.values.dimAmount * 100).rounded()))%")
+            Section("Scrolling") {
+                stepper("Animation", value: $settings.values.animationDuration, in: 0...1, step: 0.05) {
+                    $0 < 0.001 ? "Off" : "\(Int(($0 * 1000).rounded())) ms"
+                }
+                Picker("Center focused column", selection: $settings.values.centerFocused) {
+                    Text("Never").tag(CenterFocus.never)
+                    Text("When columns overflow").tag(CenterFocus.onOverflow)
+                    Text("Always").tag(CenterFocus.always)
                 }
             }
         }
+    }
+
+    private func commitPresets() {
+        if let presets = Self.parse(presetsText) { settings.values.widthPresets = presets }
+        presetsText = Self.format(settings.values.widthPresets)
+    }
+
+    private var appearance: some View {
+        Form {
+            Section("Focus border") {
+                Toggle("Draw a border around the focused window", isOn: $settings.values.focusBorder)
+                Group {
+                    ColorPicker("Color", selection: borderColor, supportsOpacity: false)
+                    stepper("Width", value: $settings.values.borderWidth, in: 1...16, step: 1) { "\(Int($0)) pt" }
+                }
+                .disabled(!settings.values.focusBorder)
+            }
+            Section("Dimming") {
+                Toggle("Dim windows behind the focused one", isOn: $settings.values.dimBackground)
+                stepper("Amount", value: $settings.values.dimAmount, in: 0.05...0.8, step: 0.05) { Self.percent($0) }
+                    .disabled(!settings.values.dimBackground)
+            }
+            Section {
+                stepper("Window corner radius", value: $settings.values.cornerRadius, in: 0...40, step: 1) {
+                    "\(Int($0)) pt"
+                }
+                .disabled(!settings.values.focusBorder && !settings.values.dimBackground)
+            } footer: {
+                Text(Thumbnails.hasAccess
+                     ? "Shapes the border and dimming until each window's own corners are measured."
+                     : "Shapes the border and dimming. Grant Screen Recording permission to match "
+                       + "each window's own corners.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section("Minimap") {
+                Picker("Style", selection: $settings.values.minimapStyle) {
+                    Text("Strip").tag(MinimapStyle.strip)
+                    Text("App icon toolbar").tag(MinimapStyle.toolbar)
+                }
+            }
+        }
+    }
+
+    /// A numeric setting with its current value shown beside the stepper.
+    private func stepper(_ title: String, value: Binding<Double>, in range: ClosedRange<Double>, step: Double,
+                         format: (Double) -> String) -> some View {
+        let shown = format(value.wrappedValue)
+        return LabeledContent(title) {
+            HStack {
+                Text(shown).monospacedDigit()
+                Stepper(title, value: value, in: range, step: step)
+                    .labelsHidden()
+                    .accessibilityValue(shown)
+            }
+        }
+    }
+
+    private static func percent(_ fraction: Double) -> String {
+        "\(Int((fraction * 100).rounded()))%"
     }
 
     private var borderColor: Binding<Color> {
@@ -110,21 +163,17 @@ struct SettingsView: View {
     }
 
     private var apps: some View {
-        VStack(alignment: .leading) {
-            if settings.values.appRules.isEmpty {
-                Text("Every app tiles. Add an app to float it or give it a fixed place on the strip.")
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                List {
-                    ForEach(settings.values.appRules) { rule in
-                        AppRuleRow(rule: binding(for: rule), workspaceNames: settings.values.workspaceNames) {
-                            settings.values.appRules.removeAll { $0.id == rule.id }
-                        }
+        Form {
+            Section {
+                if settings.values.appRules.isEmpty {
+                    Text("Every app tiles.")
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(settings.values.appRules) { rule in
+                    AppRuleRow(rule: binding(for: rule), workspaceNames: settings.values.workspaceNames) {
+                        settings.values.appRules.removeAll { $0.id == rule.id }
                     }
                 }
-            }
-            HStack {
                 Menu("Add App") {
                     ForEach(runningApps, id: \.name) { app in
                         Button {
@@ -141,12 +190,14 @@ struct SettingsView: View {
                     Button("Other App…") { chooseApp() }
                 }
                 .fixedSize()
-                Spacer()
+            } header: {
+                Text("App rules")
+            } footer: {
+                Text("Floating apps are left where they are, on every workspace, like dialogs. "
+                     + "An app with a slot opens at that column of that workspace; you can still move it after.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
-            Text("Floating apps are left where they are, on every workspace, like dialogs. "
-                 + "An app with a slot opens at that column of that workspace; you can still move it after.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
     }
 
@@ -202,9 +253,11 @@ struct SettingsView: View {
     }
 
     private var shortcuts: some View {
-        List(HotKey.Category.allCases, id: \.self) { category in
-            Section(category.rawValue) {
-                ForEach(HotKey.defaults.filter { $0.category == category }, id: \.id) { shortcutRow($0) }
+        Form {
+            ForEach(HotKey.Category.allCases, id: \.self) { category in
+                Section(category.rawValue) {
+                    ForEach(HotKey.defaults.filter { $0.category == category }, id: \.id) { shortcutRow($0) }
+                }
             }
         }
     }
