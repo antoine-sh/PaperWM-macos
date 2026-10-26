@@ -15,9 +15,6 @@ use crate::workspace::{CenterFocus, Workspace};
 /// Number of PaperWM workspaces.
 pub const WORKSPACE_COUNT: usize = 9;
 
-/// Share of the screen `WidenColumn` and `NarrowColumn` add or take away.
-const WIDTH_STEP: f64 = 0.1;
-
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(default)]
 pub struct Config {
@@ -25,6 +22,8 @@ pub struct Config {
     pub gap: f64,
     /// Column widths `CycleWidth` steps through, as fractions of the screen.
     pub width_presets: Vec<f64>,
+    /// Share of the screen `WidenColumn` and `NarrowColumn` add or take away.
+    pub width_step: f64,
     /// One name per workspace.
     pub workspace_names: Vec<String>,
     /// Seconds the strip takes to slide to a new scroll position; 0 jumps.
@@ -65,6 +64,7 @@ impl Default for Config {
         Self {
             gap: 8.0,
             width_presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0],
+            width_step: 0.1,
             workspace_names: (1..=WORKSPACE_COUNT).map(|i| i.to_string()).collect(),
             animation_duration: 0.25,
             center_focused: CenterFocus::Never,
@@ -79,8 +79,8 @@ impl Config {
         self.app_rules.iter().find(|r| r.app == app)
     }
 
-    /// Parses the app's settings; missing or empty fields take their
-    /// defaults. Returns `None` for malformed JSON or a negative gap or
+    /// Parses the app's settings; missing or empty fields, and a width step
+    /// that is not positive, take their defaults. Returns `None` for malformed JSON or a negative gap or
     /// animation duration. Rules naming a workspace that does not exist are
     /// dropped.
     pub fn from_json(json: &str) -> Option<Self> {
@@ -91,6 +91,9 @@ impl Config {
         let defaults = Config::default();
         if config.width_presets.is_empty() {
             config.width_presets = defaults.width_presets;
+        }
+        if config.width_step <= 0.0 {
+            config.width_step = defaults.width_step;
         }
         config.workspace_names.truncate(WORKSPACE_COUNT);
         let have = config.workspace_names.len();
@@ -141,7 +144,7 @@ pub enum Command {
     ScrollEnd,
     FocusFirst,
     FocusLast,
-    /// Widens the focused column by `WIDTH_STEP` of the screen.
+    /// Widens the focused column by `Config::width_step` of the screen.
     WidenColumn,
     NarrowColumn,
 }
@@ -655,8 +658,8 @@ impl Engine {
             }
             Command::FocusFirst => ws.focus_edge(false),
             Command::FocusLast => ws.focus_edge(true),
-            Command::WidenColumn => ws.nudge_width(WIDTH_STEP * viewport, viewport),
-            Command::NarrowColumn => ws.nudge_width(-WIDTH_STEP * viewport, viewport),
+            Command::WidenColumn => ws.nudge_width(self.config.width_step * viewport, viewport),
+            Command::NarrowColumn => ws.nudge_width(-self.config.width_step * viewport, viewport),
         };
         if !matches!(command, Command::Center | Command::ScrollBy(_)) {
             self.ensure_visible_all();
@@ -1161,6 +1164,17 @@ mod tests {
     }
 
     #[test]
+    fn width_step_sets_how_far_widen_and_narrow_go() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.set_config(Config { width_step: 0.25, animation_duration: 0.0, ..Config::default() }).unwrap();
+        engine.sync().unwrap();
+        engine.command(Command::WidenColumn).unwrap();
+        assert_eq!(backend.frame_of(1).unwrap().width, 550.0);
+        engine.command(Command::NarrowColumn).unwrap();
+        assert_eq!(backend.frame_of(1).unwrap().width, 300.0);
+    }
+
+    #[test]
     fn move_and_stack_commands_rearrange_columns() {
         let (mut engine, _) =
             engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0), window(3, 200.0, 300.0)]);
@@ -1581,6 +1595,7 @@ mod tests {
         let config = Config::from_json(r#"{"gap":4}"#).unwrap();
         assert_eq!(config.gap, 4.0);
         assert_eq!(config.width_presets, Config::default().width_presets);
+        assert_eq!(config.width_step, 0.1);
         assert_eq!(config.workspace_names, (1..=9).map(|i| i.to_string()).collect::<Vec<_>>());
 
         let config = Config::from_json(r#"{"width_presets":[],"workspace_names":["Web"]}"#).unwrap();
@@ -1592,6 +1607,7 @@ mod tests {
         assert_eq!(Config::from_json("nope"), None);
         assert_eq!(Config::from_json(r#"{"gap":-3}"#), None);
         assert_eq!(Config::from_json(r#"{"animation_duration":-1}"#), None);
+        assert_eq!(Config::from_json(r#"{"width_step":0}"#).unwrap().width_step, 0.1);
         assert_eq!(
             Config::from_json(r#"{"center_focused":"on_overflow"}"#).unwrap().center_focused,
             CenterFocus::OnOverflow
