@@ -122,6 +122,24 @@ impl Workspace {
         self.columns.iter().find(|c| c.pinned == Some(pin)).map_or(0.0, |c| c.width + gap)
     }
 
+    /// The left and right pin margins.
+    pub fn pin_margins(&self, gap: f64) -> (f64, f64) {
+        (self.pin_margin(Pin::Left, gap), self.pin_margin(Pin::Right, gap))
+    }
+
+    /// Shrinks the pins so they leave the strip at least a minimum-width
+    /// column, after a pin was widened or moved to a narrower monitor.
+    fn fit_pins(&mut self, viewport: f64, gap: f64) {
+        let (lead, trail) = self.pin_margins(gap);
+        let room = viewport - MIN_COLUMN_WIDTH;
+        if lead + trail <= room {
+            return;
+        }
+        for column in self.columns.iter_mut().filter(|c| c.pinned.is_some()) {
+            column.width = ((column.width + gap) / (lead + trail) * room - gap).max(MIN_COLUMN_WIDTH.min(viewport));
+        }
+    }
+
     fn strip_width(&self, gap: f64) -> f64 {
         let n = self.columns.len() as f64;
         self.columns.iter().map(|c| c.width).sum::<f64>() + gap * (n - 1.0).max(0.0)
@@ -368,7 +386,7 @@ impl Workspace {
             self.scroll = self.scroll.min(self.strip_width(gap) - viewport).max(0.0);
             return;
         }
-        let (lead, trail) = (self.pin_margin(Pin::Left, gap), self.pin_margin(Pin::Right, gap));
+        let (lead, trail) = self.pin_margins(gap);
         let x = self.column_x(self.focused, gap) - lead;
         let width = self.columns[self.focused].width;
         let room = viewport - lead - trail;
@@ -391,11 +409,14 @@ impl Workspace {
 
     /// Brings the focused column into view the way `mode` asks.
     pub fn follow_focus(&mut self, mode: CenterFocus, viewport: f64, gap: f64) {
+        self.fit_pins(viewport, gap);
         let center = match mode {
             CenterFocus::Never => false,
             CenterFocus::OnOverflow => self.strip_width(gap) > viewport,
             CenterFocus::Always => !self.columns.is_empty(),
         };
+        // A pin is always in view, so only the strip's range is kept.
+        let center = center && self.columns[self.focused].pinned.is_none();
         if center {
             self.center_focused(viewport, gap);
             // Centred by the mode, not by request, so it ends with the mode.
@@ -417,7 +438,7 @@ impl Workspace {
     /// How far right of the viewport's left edge the middle of the width
     /// the pins leave is.
     fn strip_middle(&self, viewport: f64, gap: f64) -> f64 {
-        let (lead, trail) = (self.pin_margin(Pin::Left, gap), self.pin_margin(Pin::Right, gap));
+        let (lead, trail) = self.pin_margins(gap);
         lead + (viewport - lead - trail) / 2.0
     }
 
@@ -907,6 +928,25 @@ mod tests {
         ws.focus_edge(false);
         assert!(!ws.toggle_pin(Pin::Left, VIEW, GAP));
         assert_eq!(pins(&ws), vec![None, None, Some(Pin::Right)]);
+    }
+
+    #[test]
+    fn pins_grown_past_the_room_are_shrunk_to_fit() {
+        let mut ws = workspace(&[300.0, 300.0, 300.0]);
+        ws.focus_edge(false);
+        ws.toggle_pin(Pin::Left, VIEW, GAP);
+        ws.toggle_full_width(VIEW);
+        ws.follow_focus(CenterFocus::Never, VIEW, GAP);
+        assert_eq!(ws.pin_margins(GAP), (VIEW - MIN_COLUMN_WIDTH, 0.0));
+    }
+
+    #[test]
+    fn centring_keeps_the_strip_in_range_while_a_pin_is_focused() {
+        let mut ws = workspace(&[300.0, 300.0, 300.0, 300.0, 300.0]);
+        ws.follow_focus(CenterFocus::Always, VIEW, GAP);
+        ws.toggle_pin(Pin::Left, VIEW, GAP);
+        ws.follow_focus(CenterFocus::Always, VIEW, GAP);
+        assert_eq!(ws.scroll(), 1540.0 - VIEW);
     }
 
     #[test]

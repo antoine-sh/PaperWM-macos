@@ -182,11 +182,12 @@ struct ToolbarView: View {
     /// Whether the column is on screen: in the viewport and, unless pinned, not parked under a pin.
     private func isVisible(_ index: Int, in workspace: EngineState.Workspace) -> Bool {
         let column = workspace.columns[index]
-        if column.pinned != nil || index == workspace.focusedColumn {
-            return true
-        }
         guard column.x + column.width > workspace.scroll, column.x < workspace.scroll + monitor.viewport else {
             return false
+        }
+        // The focused column is never parked under a pin, even when wider than the room beside them.
+        if column.pinned != nil || index == workspace.focusedColumn {
+            return true
         }
         return workspace.columns.allSatisfy { pin in
             switch pin.pinned {

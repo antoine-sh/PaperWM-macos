@@ -22,7 +22,7 @@ pub fn frames(
 ) -> Vec<(WindowId, Rect)> {
     let height = area.height - 2.0 * gap;
     let mut result = Vec::new();
-    let (lead, trail) = (workspace.pin_margin(Pin::Left, gap), workspace.pin_margin(Pin::Right, gap));
+    let (lead, trail) = workspace.pin_margins(gap);
     let mut strip_x = 0.0;
     for (index, column) in workspace.columns().iter().enumerate() {
         let x = match column.pinned() {
