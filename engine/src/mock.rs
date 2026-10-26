@@ -16,6 +16,9 @@ pub struct MockBackend {
     focus_is_async: Cell<bool>,
     /// Apps whose windows `windows` leaves out, as if they were busy.
     unresponsive: RefCell<Vec<i32>>,
+    /// Background tabs. Like macOS, a tab group is the windows of one app
+    /// sharing a frame, of which only the shown one is on screen.
+    hidden_tabs: RefCell<Vec<WindowId>>,
 }
 
 impl MockBackend {
@@ -37,6 +40,7 @@ impl MockBackend {
             frame,
             is_standard: true,
             is_minimized: false,
+            tabs: Vec::new(),
         }
     }
 
@@ -45,7 +49,45 @@ impl MockBackend {
     }
 
     pub fn remove(&self, id: WindowId) {
+        self.leave_tab_group(id);
         self.windows.borrow_mut().retain(|w| w.id != id);
+    }
+
+    /// Opens tab `id` in front of `shown` in its tab group.
+    pub fn add_tab(&self, shown: WindowId, id: WindowId) {
+        let Some(mut tab) = self.windows.borrow().iter().find(|w| w.id == shown).cloned() else { return };
+        tab.id = id;
+        tab.title = format!("Window {id}");
+        self.hidden_tabs.borrow_mut().push(shown);
+        self.add(tab);
+    }
+
+    /// Brings the background tab `id` to the front of its group.
+    pub fn select_tab(&self, id: WindowId) {
+        let mut hidden = self.hidden_tabs.borrow_mut();
+        let shown: Vec<WindowId> = self.tab_group(id).into_iter().filter(|t| !hidden.contains(t)).collect();
+        hidden.extend(shown);
+        hidden.retain(|&t| t != id);
+    }
+
+    /// Drags tab `id` out of its group into a window of its own at `frame`.
+    pub fn detach_tab(&self, id: WindowId, frame: Rect) {
+        self.leave_tab_group(id);
+        self.update(id, |w| w.frame = frame);
+    }
+
+    /// The other tabs of `id`'s group: the app's other windows at its frame.
+    fn tab_group(&self, id: WindowId) -> Vec<WindowId> {
+        let windows = self.windows.borrow();
+        let Some(tab) = windows.iter().find(|w| w.id == id) else { return Vec::new() };
+        windows.iter().filter(|w| w.id != id && w.pid == tab.pid && w.frame == tab.frame).map(|w| w.id).collect()
+    }
+
+    /// Takes `id` out of its group; if it was shown, the next tab comes forward.
+    fn leave_tab_group(&self, id: WindowId) {
+        let was_shown = !self.hidden_tabs.borrow().contains(&id);
+        let next = self.tab_group(id).first().copied();
+        self.hidden_tabs.borrow_mut().retain(|&t| t != id && !(was_shown && Some(t) == next));
     }
 
     pub fn update(&self, id: WindowId, f: impl FnOnce(&mut WindowInfo)) {
@@ -92,7 +134,10 @@ impl WindowBackend for MockBackend {
             return Err(BackendError::NotTrusted);
         }
         let busy = self.unresponsive.borrow();
-        Ok(self.windows.borrow().iter().filter(|w| !busy.contains(&w.pid)).cloned().collect())
+        let hidden = self.hidden_tabs.borrow();
+        let windows = self.windows.borrow();
+        let shown = windows.iter().filter(|w| !busy.contains(&w.pid) && !hidden.contains(&w.id));
+        Ok(shown.map(|w| WindowInfo { tabs: self.tab_group(w.id), ..w.clone() }).collect())
     }
 
     fn skipped_apps(&self) -> Vec<i32> {
@@ -105,11 +150,17 @@ impl WindowBackend for MockBackend {
         }
         self.set_frame_calls.set(self.set_frame_calls.get() + 1);
         let mut windows = self.windows.borrow_mut();
-        let window = windows.iter_mut().find(|w| w.id == id).ok_or(BackendError::WindowNotFound(id))?;
+        let window = windows.iter().find(|w| w.id == id).ok_or(BackendError::WindowNotFound(id))?;
         if self.unresponsive.borrow().contains(&window.pid) {
             return Err(BackendError::Platform("app is not responding".into()));
         }
-        window.frame = frame;
+        // Background tabs move with the shown one.
+        let (pid, old) = (window.pid, window.frame);
+        let hidden = self.hidden_tabs.borrow();
+        for w in windows.iter_mut().filter(|w| w.id == id || (w.pid == pid && w.frame == old && hidden.contains(&w.id)))
+        {
+            w.frame = frame;
+        }
         Ok(())
     }
 

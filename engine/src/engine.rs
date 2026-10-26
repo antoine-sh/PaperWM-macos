@@ -479,7 +479,8 @@ impl Engine {
                 self.applier.forget(id);
             }
         }
-        self.info = current;
+        let previous = std::mem::replace(&mut self.info, current);
+        self.follow_tabs(&previous);
 
         self.scratch.retain(|(id, _)| self.info.contains_key(id));
         self.mru.retain(|id| self.info.contains_key(id));
@@ -580,6 +581,36 @@ impl Engine {
 
         self.ensure_visible_all();
         self.apply()
+    }
+
+    /// Gives the place of each managed window that went away to the tab that
+    /// came forward in its native tab group, one it hid or one hiding it, so
+    /// opening, switching and closing tabs keep the group's column.
+    fn follow_tabs(&mut self, previous: &HashMap<WindowId, WindowInfo>) {
+        for (&old, info) in previous {
+            if self.info.contains_key(&old) {
+                continue;
+            }
+            let managed =
+                |id| self.scratch.iter().any(|&(w, _)| w == id) || self.workspaces.iter().any(|w| w.contains(id));
+            let Some(new) = self
+                .info
+                .values()
+                .find(|w| w.pid == info.pid && (w.tabs.contains(&old) || info.tabs.contains(&w.id)) && !managed(w.id))
+                .map(|w| w.id)
+            else {
+                continue;
+            };
+            for workspace in &mut self.workspaces {
+                workspace.replace_window(old, new);
+            }
+            for id in self.scratch.iter_mut().map(|(id, _)| id).chain(&mut self.mru) {
+                if *id == old {
+                    *id = new;
+                }
+            }
+            self.applier.forget(old);
+        }
     }
 
     /// Puts every window back in its place, including ones that seemed to
@@ -1063,6 +1094,72 @@ mod tests {
         engine.sync().unwrap();
         assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
         assert_eq!(backend.frame_of(2).unwrap().x, 316.0);
+    }
+
+    fn widths(engine: &Engine) -> Vec<f64> {
+        engine.workspace(0).unwrap().columns().iter().map(|c| c.width()).collect()
+    }
+
+    #[test]
+    fn tab_group_keeps_one_column_that_follows_the_shown_tab() {
+        let windows = vec![window(1, 0.0, 300.0), window(2, 400.0, 500.0), window(4, 950.0, 200.0)];
+        let (mut engine, backend) = engine_with(windows);
+        engine.sync().unwrap();
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        let column = backend.frame_of(2).unwrap();
+
+        backend.add_tab(2, 3);
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![4]]);
+        assert_eq!(widths(&engine), vec![300.0, 500.0, 200.0]);
+
+        backend.select_tab(2);
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2], vec![4]]);
+
+        // Closing the shown tab brings the next one forward in its place.
+        backend.remove(2);
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![4]]);
+        assert_eq!(backend.frame_of(3), Some(column));
+        assert_eq!(engine.state().focused_window, Some(3));
+    }
+
+    #[test]
+    fn closing_a_background_tab_changes_nothing() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        backend.add_tab(1, 2);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![2]]);
+        let calls = backend.set_frame_calls();
+
+        backend.remove(1);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![2]]);
+        assert_eq!(backend.set_frame_calls(), calls);
+    }
+
+    #[test]
+    fn detached_tab_opens_its_own_column() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        backend.add_tab(1, 2);
+        backend.add_tab(2, 3);
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![3]]);
+
+        backend.detach_tab(1, Rect::new(500.0, 100.0, 400.0, 300.0));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![3], vec![1]]);
+
+        // The shown tab keeps its column; the tab behind it opens beside it.
+        backend.detach_tab(3, Rect::new(600.0, 100.0, 400.0, 300.0));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![3], vec![2], vec![1]]);
     }
 
     #[test]

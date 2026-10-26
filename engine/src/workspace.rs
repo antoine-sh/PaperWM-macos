@@ -165,6 +165,13 @@ impl Workspace {
         true
     }
 
+    /// Puts `new` in the place of `old`.
+    pub fn replace_window(&mut self, old: WindowId, new: WindowId) {
+        if let Some((c, r)) = self.position(old) {
+            self.columns[c].windows[r] = new;
+        }
+    }
+
     pub fn focus_window(&mut self, id: WindowId) -> bool {
         let Some((c, r)) = self.position(id) else { return false };
         self.focused = c;
