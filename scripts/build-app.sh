@@ -40,6 +40,7 @@ rm -rf "$bundle"
 mkdir -p "$bundle/Contents/MacOS" "$bundle/Contents/Resources"
 lipo -create "${binaries[@]}" -output "$bundle/Contents/MacOS/PaperWM"
 sed "s/__VERSION__/$version/g" app/Resources/Info.plist > "$bundle/Contents/Info.plist"
+cp app/Resources/AppIcon.icns "$bundle/Contents/Resources/"
 
 # An ad-hoc signature gives the app a stable identity for the Accessibility
 # permission. Release signing and notarization come later.
