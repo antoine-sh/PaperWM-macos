@@ -62,6 +62,9 @@ typedef enum {
     PWM_COMMAND_TOGGLE_TABBED = 33,
     PWM_COMMAND_TOGGLE_PIN_LEFT = 34,
     PWM_COMMAND_TOGGLE_PIN_RIGHT = 35,
+    PWM_COMMAND_TALLER = 36,
+    PWM_COMMAND_SHORTER = 37,
+    PWM_COMMAND_EQUAL_HEIGHTS = 38,
 } PwmCommand;
 
 // Top-left origin, y grows downwards (Accessibility coordinates).

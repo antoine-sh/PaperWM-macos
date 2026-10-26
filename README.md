@@ -44,6 +44,8 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 | ⌃⌥ O | Push the focused window out into its own column |
 | ⌃⌥⇧ T | Toggle the column between stacked and tabbed |
 | ⌃⌥ P / ⌃⌥⇧ P | Pin the column to the left / right edge, or unpin it |
+| ⌃⌥⇧ = / - | Make the window taller / shorter in its stacked column (by 10% of the column; set the step in Settings) |
+| ⌃⌥ 0 | Give every window in the column the same height |
 | ⌃⌥ Tab / ⌃⌥⇧ Tab | Switch windows (release ⌃⌥ to pick, ⌃⌥ Esc to cancel) |
 | ⌃⌥ 1…9 | Switch to workspace 1…9 |
 | ⌃⌥⇧ 1…9 | Move the window to workspace 1…9 |

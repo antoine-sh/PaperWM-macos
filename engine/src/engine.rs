@@ -24,6 +24,8 @@ pub struct Config {
     pub width_presets: Vec<f64>,
     /// Share of the screen `WidenColumn` and `NarrowColumn` add or take away.
     pub width_step: f64,
+    /// Share of a stacked column's height `Taller` and `Shorter` move.
+    pub height_step: f64,
     /// One name per workspace.
     pub workspace_names: Vec<String>,
     /// Seconds the strip takes to slide to a new scroll position; 0 jumps.
@@ -65,6 +67,7 @@ impl Default for Config {
             gap: 8.0,
             width_presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0],
             width_step: 0.1,
+            height_step: 0.1,
             workspace_names: (1..=WORKSPACE_COUNT).map(|i| i.to_string()).collect(),
             animation_duration: 0.25,
             center_focused: CenterFocus::Never,
@@ -79,8 +82,8 @@ impl Config {
         self.app_rules.iter().find(|r| r.app == app)
     }
 
-    /// Parses the app's settings; missing or empty fields, and a width step
-    /// that is not positive, take their defaults. Returns `None` for
+    /// Parses the app's settings; missing or empty fields, and a width or
+    /// height step that is not positive, take their defaults. Returns `None` for
     /// malformed JSON or a negative gap or animation duration. Rules naming a
     /// workspace that does not exist are dropped.
     pub fn from_json(json: &str) -> Option<Self> {
@@ -94,6 +97,9 @@ impl Config {
         }
         if config.width_step <= 0.0 {
             config.width_step = defaults.width_step;
+        }
+        if config.height_step <= 0.0 {
+            config.height_step = defaults.height_step;
         }
         config.workspace_names.truncate(WORKSPACE_COUNT);
         let have = config.workspace_names.len();
@@ -153,6 +159,11 @@ pub enum Command {
     TogglePinLeft,
     /// Pins the focused column to the right edge, or unpins it.
     TogglePinRight,
+    /// Grows the focused window by `Config::height_step` of its stacked column.
+    Taller,
+    Shorter,
+    /// Gives every window in the focused column the same height.
+    EqualHeights,
 }
 
 impl Command {
@@ -197,6 +208,9 @@ impl Command {
             33 => ToggleTabbed,
             34 => TogglePinLeft,
             35 => TogglePinRight,
+            36 => Taller,
+            37 => Shorter,
+            38 => EqualHeights,
             _ => return None,
         })
     }
@@ -658,6 +672,7 @@ impl Engine {
         }
         let gap = self.config.gap;
         let viewport = self.viewport(self.active);
+        let column_height = self.monitors[self.active].area.height - 2.0 * gap;
         let current = self.monitors[self.active].workspace;
         let before = self.focused_window();
         // Set by commands that decide focus themselves.
@@ -732,6 +747,9 @@ impl Engine {
             }
             Command::TogglePinLeft => ws.toggle_pin(Pin::Left, viewport, gap),
             Command::TogglePinRight => ws.toggle_pin(Pin::Right, viewport, gap),
+            Command::Taller => ws.resize_row(self.config.height_step, column_height, gap),
+            Command::Shorter => ws.resize_row(-self.config.height_step, column_height, gap),
+            Command::EqualHeights => ws.equalize_rows(),
         };
         if !matches!(command, Command::Center | Command::ScrollBy(_)) {
             self.ensure_visible_all();
@@ -1372,6 +1390,36 @@ mod tests {
     }
 
     #[test]
+    fn stacked_window_heights_can_be_changed_and_equalized() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        let height = |id| backend.frame_of(id).unwrap().height.round();
+        assert_eq!(engine.command(Command::Taller), Ok(false));
+        engine.command(Command::FocusLeft).unwrap();
+        engine.command(Command::Consume).unwrap();
+        assert_eq!((height(1), height(2)), (288.0, 288.0));
+        assert_eq!(engine.command(Command::Taller), Ok(true));
+        assert_eq!((height(1), height(2)), (346.0, 230.0));
+        engine.command(Command::Shorter).unwrap();
+        engine.command(Command::Shorter).unwrap();
+        assert_eq!((height(1), height(2)), (230.0, 346.0));
+        assert_eq!(engine.command(Command::EqualHeights), Ok(true));
+        assert_eq!((height(1), height(2)), (288.0, 288.0));
+    }
+
+    #[test]
+    fn height_step_sets_how_far_taller_and_shorter_go() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.set_config(Config { height_step: 0.25, animation_duration: 0.0, ..Config::default() }).unwrap();
+        engine.sync().unwrap();
+        engine.command(Command::FocusLeft).unwrap();
+        engine.command(Command::Consume).unwrap();
+        engine.command(Command::Taller).unwrap();
+        // 576 points of rows split 0.75 / 0.25.
+        assert_eq!((backend.frame_of(1).unwrap().height, backend.frame_of(2).unwrap().height), (432.0, 144.0));
+    }
+
+    #[test]
     fn unchanged_layout_does_not_move_windows_again() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0)]);
         engine.sync().unwrap();
@@ -1769,6 +1817,7 @@ mod tests {
     fn command_parsing_rejects_unknown_values() {
         assert_eq!(Command::parse(0, 0.0), Some(Command::FocusLeft));
         assert_eq!(Command::parse(12, 0.0), Some(Command::Expel));
+        assert_eq!(Command::parse(38, 0.0), Some(Command::EqualHeights));
         assert_eq!(Command::parse(u32::MAX, 0.0), None);
     }
 
@@ -1789,6 +1838,7 @@ mod tests {
         assert_eq!(config.gap, 4.0);
         assert_eq!(config.width_presets, Config::default().width_presets);
         assert_eq!(config.width_step, 0.1);
+        assert_eq!(config.height_step, 0.1);
         assert_eq!(config.workspace_names, (1..=9).map(|i| i.to_string()).collect::<Vec<_>>());
 
         let config = Config::from_json(r#"{"width_presets":[],"workspace_names":["Web"]}"#).unwrap();
@@ -1801,6 +1851,7 @@ mod tests {
         assert_eq!(Config::from_json(r#"{"gap":-3}"#), None);
         assert_eq!(Config::from_json(r#"{"animation_duration":-1}"#), None);
         assert_eq!(Config::from_json(r#"{"width_step":0}"#).unwrap().width_step, 0.1);
+        assert_eq!(Config::from_json(r#"{"height_step":-1}"#).unwrap().height_step, 0.1);
         assert_eq!(
             Config::from_json(r#"{"center_focused":"on_overflow"}"#).unwrap().center_focused,
             CenterFocus::OnOverflow

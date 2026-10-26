@@ -14,6 +14,9 @@ pub struct Column {
     focused_row: usize,
     /// Width to go back to when leaving full width.
     width_before_full: Option<f64>,
+    /// Each window's share of the column height, summing to 1. Empty means
+    /// equal shares, which is what any change to the stack goes back to.
+    heights: Vec<f64>,
     /// Shows only the focused window, at the column's full height, with the
     /// others behind it.
     tabbed: bool,
@@ -32,7 +35,15 @@ pub enum Pin {
 
 impl Column {
     fn new(window: WindowId, width: f64) -> Self {
-        Self { windows: vec![window], width, focused_row: 0, width_before_full: None, tabbed: false, pinned: None }
+        Self {
+            windows: vec![window],
+            width,
+            focused_row: 0,
+            width_before_full: None,
+            heights: Vec::new(),
+            tabbed: false,
+            pinned: None,
+        }
     }
 
     pub fn windows(&self) -> &[WindowId] {
@@ -49,6 +60,11 @@ impl Column {
 
     pub fn focused_row(&self) -> usize {
         self.focused_row
+    }
+
+    /// The share of the column height that window `row` gets.
+    pub fn height_share(&self, row: usize) -> f64 {
+        self.heights.get(row).copied().unwrap_or(1.0 / self.windows.len() as f64)
     }
 
     pub fn is_tabbed(&self) -> bool {
@@ -85,6 +101,9 @@ pub enum CenterFocus {
 
 /// Narrowest column the layout produces.
 pub const MIN_COLUMN_WIDTH: f64 = 100.0;
+
+/// Shortest a stacked window gets from resizing its neighbours.
+pub const MIN_ROW_HEIGHT: f64 = 100.0;
 
 impl Workspace {
     pub fn columns(&self) -> &[Column] {
@@ -185,6 +204,7 @@ impl Workspace {
         }
         let column = &mut self.columns[c];
         column.windows.remove(r);
+        column.heights.clear();
         if column.focused_row >= column.windows.len() || r < column.focused_row {
             column.focused_row = column.focused_row.saturating_sub(1);
         }
@@ -202,6 +222,7 @@ impl Workspace {
         let Some((c, r)) = self.position(id) else { return false };
         let column = &mut self.columns[c];
         column.windows.remove(r);
+        column.heights.clear();
         if column.windows.is_empty() {
             self.columns.remove(c);
             if c < self.focused || (c == self.focused && self.focused == self.columns.len()) {
@@ -265,6 +286,9 @@ impl Workspace {
         let Some(column) = self.columns.get_mut(self.focused) else { return false };
         let Some(target) = offset(column.focused_row, delta, column.windows.len()) else { return false };
         column.windows.swap(column.focused_row, target);
+        if !column.heights.is_empty() {
+            column.heights.swap(column.focused_row, target);
+        }
         column.focused_row = target;
         true
     }
@@ -278,6 +302,7 @@ impl Workspace {
             return false;
         }
         let window = self.columns[next].windows.remove(0);
+        self.columns[next].heights.clear();
         if self.columns[next].windows.is_empty() {
             self.columns.remove(next);
         } else {
@@ -285,6 +310,7 @@ impl Workspace {
             column.focused_row = column.focused_row.saturating_sub(1);
         }
         self.columns[self.focused].windows.push(window);
+        self.columns[self.focused].heights.clear();
         true
     }
 
@@ -296,6 +322,7 @@ impl Workspace {
             return false;
         }
         let window = column.windows.remove(column.focused_row);
+        column.heights.clear();
         column.focused_row = column.focused_row.min(column.windows.len() - 1);
         let width = column.width;
         self.columns.insert(self.focused + 1, Column::new(window, width));
@@ -365,6 +392,48 @@ impl Workspace {
         column.width = width;
         column.width_before_full = None;
         true
+    }
+
+    /// Grows the focused window by `step` of its column's `height`, or
+    /// shrinks it for a negative step, taking from or giving to the other
+    /// windows in the column. No window goes below [`MIN_ROW_HEIGHT`].
+    /// Tabbed columns keep their heights for when they stack again.
+    pub fn resize_row(&mut self, step: f64, height: f64, gap: f64) -> bool {
+        let Some(column) = self.columns.get_mut(self.focused) else { return false };
+        let n = column.windows.len();
+        // A tabbed column shows each window at full height.
+        if n < 2 || column.tabbed {
+            return false;
+        }
+        let rows = (height - gap * (n - 1) as f64).max(1.0);
+        let min = (MIN_ROW_HEIGHT / rows).min(1.0 / n as f64);
+        let mut shares: Vec<f64> = (0..n).map(|i| column.height_share(i)).collect();
+        let row = column.focused_row;
+        let others = 1.0 - shares[row];
+        let spare = others - min * (n - 1) as f64;
+        // Shares set on a taller monitor can sit below `min`; never resize the wrong way.
+        let delta = if step > 0.0 { step.min(spare).max(0.0) } else { step.max(min - shares[row]).min(0.0) };
+        if delta.abs() < 1e-9 {
+            return false;
+        }
+        for (i, share) in shares.iter_mut().enumerate() {
+            if i == row {
+                *share += delta;
+            } else if delta > 0.0 {
+                // In proportion to what each has above the minimum, so none goes below it.
+                *share -= delta * (*share - min) / spare;
+            } else {
+                *share -= delta * *share / others;
+            }
+        }
+        column.heights = shares;
+        true
+    }
+
+    /// Gives every window in the focused column the same height, unless it
+    /// is tabbed.
+    pub fn equalize_rows(&mut self) -> bool {
+        self.columns.get_mut(self.focused).is_some_and(|c| !c.tabbed && !std::mem::take(&mut c.heights).is_empty())
     }
 
     pub fn toggle_full_width(&mut self, viewport: f64) -> bool {
@@ -1034,5 +1103,99 @@ mod tests {
         ws.center_focused(VIEW, GAP);
         // Column 2 spans 610..1010, centre 810.
         assert_eq!(ws.scroll(), 810.0 - VIEW / 2.0);
+    }
+
+    fn shares(ws: &Workspace) -> Vec<f64> {
+        let column = &ws.columns()[ws.focused_column()];
+        (0..column.windows().len()).map(|i| (column.height_share(i) * 1000.0).round() / 1000.0).collect()
+    }
+
+    /// Workspace with windows 1, 2 and 3 stacked in one column, 1 focused.
+    fn stack_of_three() -> Workspace {
+        let mut ws = workspace(&[300.0, 300.0, 300.0]);
+        ws.focus_column(-2);
+        ws.consume();
+        ws.consume();
+        ws
+    }
+
+    #[test]
+    fn resizing_a_row_trades_height_with_the_others() {
+        let mut ws = stack_of_three();
+        assert_eq!(shares(&ws), vec![0.333, 0.333, 0.333]);
+        assert!(ws.resize_row(0.1, 900.0, GAP));
+        assert_eq!(shares(&ws), vec![0.433, 0.283, 0.283]);
+        assert!(ws.resize_row(-0.2, 900.0, GAP));
+        assert_eq!(shares(&ws), vec![0.233, 0.383, 0.383]);
+    }
+
+    #[test]
+    fn resizing_a_row_stops_at_the_minimum_height() {
+        let mut ws = stack_of_three();
+        // 880 points of rows, so the 100 point minimum is 0.114 of the column.
+        for _ in 0..10 {
+            ws.resize_row(0.1, 900.0, GAP);
+        }
+        assert_eq!(shares(&ws), vec![0.773, 0.114, 0.114]);
+        assert!(!ws.resize_row(0.1, 900.0, GAP));
+        for _ in 0..10 {
+            ws.resize_row(-0.1, 900.0, GAP);
+        }
+        assert_eq!(shares(&ws)[0], 0.114);
+        assert!(!ws.resize_row(-0.1, 900.0, GAP));
+    }
+
+    #[test]
+    fn heights_follow_a_moved_window_and_reset_when_stacking_changes() {
+        let mut ws = stack_of_three();
+        ws.resize_row(0.1, 900.0, GAP);
+        ws.move_row(1);
+        assert_eq!(shares(&ws), vec![0.283, 0.433, 0.283]);
+        assert!(ws.equalize_rows());
+        assert_eq!(shares(&ws), vec![0.333, 0.333, 0.333]);
+        assert!(!ws.equalize_rows());
+        ws.resize_row(0.1, 900.0, GAP);
+        ws.expel();
+        ws.focus_column(-1);
+        assert_eq!(shares(&ws), vec![0.5, 0.5]);
+        ws.resize_row(0.1, 900.0, GAP);
+        ws.remove_window(3);
+        assert_eq!(shares(&ws), vec![1.0]);
+    }
+
+    #[test]
+    fn resizing_never_goes_the_wrong_way_below_the_minimum() {
+        let mut ws = workspace(&[300.0, 300.0]);
+        ws.focus_column(-1);
+        ws.consume();
+        for _ in 0..10 {
+            ws.resize_row(0.1, 900.0, GAP);
+        }
+        assert_eq!(shares(&ws), vec![0.888, 0.112]);
+        // On a shorter monitor the 100 point minimum is 0.345 of the column,
+        // more than window 2 has, so neither may move towards it.
+        assert!(!ws.resize_row(0.1, 300.0, GAP));
+        ws.focus_row(1);
+        assert!(!ws.resize_row(-0.1, 300.0, GAP));
+        assert_eq!(shares(&ws), vec![0.888, 0.112]);
+    }
+
+    #[test]
+    fn resizing_and_equalizing_do_nothing_in_a_tabbed_column() {
+        let mut ws = stack_of_three();
+        ws.resize_row(0.1, 900.0, GAP);
+        ws.toggle_tabbed();
+        assert!(!ws.resize_row(0.1, 900.0, GAP));
+        assert!(!ws.equalize_rows());
+        ws.toggle_tabbed();
+        assert_eq!(shares(&ws), vec![0.433, 0.283, 0.283]);
+    }
+
+    #[test]
+    fn resizing_needs_a_stack() {
+        let mut ws = workspace(&[300.0]);
+        assert!(!ws.resize_row(0.1, 900.0, GAP));
+        assert!(!ws.equalize_rows());
+        assert!(!Workspace::default().resize_row(0.1, 900.0, GAP));
     }
 }
