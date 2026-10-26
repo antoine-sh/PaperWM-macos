@@ -41,6 +41,7 @@ pub struct PwmWindow {
     pub app_name: *mut c_char,
     pub title: *mut c_char,
     pub is_standard: bool,
+    pub is_resizable: bool,
     pub is_minimized: bool,
 }
 
@@ -70,6 +71,7 @@ fn to_ffi(w: &WindowInfo) -> PwmWindow {
         app_name: c_string(&w.app_name),
         title: c_string(&w.title),
         is_standard: w.is_standard,
+        is_resizable: w.is_resizable,
         is_minimized: w.is_minimized,
     }
 }

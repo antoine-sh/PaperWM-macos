@@ -1049,6 +1049,16 @@ mod tests {
     }
 
     #[test]
+    fn fixed_size_windows_float() {
+        let mut calculator = window(2, 0.0, 230.0);
+        calculator.is_resizable = false;
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), calculator]);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1]]);
+        assert_eq!(backend.frame_of(2), Some(Rect::new(0.0, 100.0, 230.0, 300.0)));
+    }
+
+    #[test]
     fn new_window_opens_right_of_focus_and_closed_window_leaves() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
         engine.sync().unwrap();

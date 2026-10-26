@@ -36,6 +36,7 @@ impl MockBackend {
             title: format!("Window {id}"),
             frame,
             is_standard: true,
+            is_resizable: true,
             is_minimized: false,
         }
     }

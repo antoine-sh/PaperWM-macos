@@ -29,8 +29,9 @@ const WINDOW_ATTRIBUTES: [&str; 5] =
 struct CachedWindow {
     element: AxElement,
     pid: i32,
-    /// The subrole never changes, so it is read once per window.
+    /// The subrole and resizability never change, so they are read once per window.
     is_standard: bool,
+    is_resizable: bool,
 }
 
 #[derive(Default)]
@@ -205,9 +206,13 @@ impl WindowBackend for AxBackend {
                     None if minimized.as_ref().and_then(as_bool).unwrap_or(false) => (usize::MAX, true),
                     None => continue,
                 };
-                let is_standard = match previous.get(&id) {
-                    Some(cached) => cached.is_standard,
-                    None => subrole.as_ref().and_then(as_string).as_deref() == Some(kAXStandardWindowSubrole),
+                let (is_standard, is_resizable) = match previous.get(&id) {
+                    Some(cached) => (cached.is_standard, cached.is_resizable),
+                    None => (
+                        subrole.as_ref().and_then(as_string).as_deref() == Some(kAXStandardWindowSubrole),
+                        // Only a definite "no" floats a window; a busy app keeps it tiled.
+                        element.is_settable(kAXSizeAttribute).unwrap_or(true),
+                    ),
                 };
                 let origin = position.as_ref().and_then(as_point).unwrap_or_default();
                 let size = size.as_ref().and_then(as_size).unwrap_or_default();
@@ -218,13 +223,14 @@ impl WindowBackend for AxBackend {
                     title: title.as_ref().and_then(as_string).unwrap_or_default(),
                     frame: Rect::new(origin.x, origin.y, size.width, size.height),
                     is_standard,
+                    is_resizable,
                     is_minimized,
                 };
                 if let Some(observer) = observers.get_mut(&pid) {
                     observer.watch_window(id, &element);
                 }
                 windows.push((z_order, info));
-                elements.insert(id, CachedWindow { element, pid, is_standard });
+                elements.insert(id, CachedWindow { element, pid, is_standard, is_resizable });
             }
             if complete {
                 seen.insert(pid, ids);

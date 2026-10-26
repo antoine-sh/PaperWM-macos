@@ -7,8 +7,8 @@ use accessibility_sys::{
     kAXErrorAPIDisabled, kAXErrorCannotComplete, kAXErrorInvalidUIElement, kAXErrorSuccess, kAXValueTypeCGPoint,
     kAXValueTypeCGSize, AXError, AXUIElementCopyAttributeValue, AXUIElementCopyMultipleAttributeValues,
     AXUIElementCreateApplication, AXUIElementCreateSystemWide, AXUIElementGetPid, AXUIElementGetTypeID,
-    AXUIElementPerformAction, AXUIElementRef, AXUIElementSetAttributeValue, AXUIElementSetMessagingTimeout,
-    AXValueCreate, AXValueGetTypeID, AXValueGetValue, AXValueRef, AXValueType,
+    AXUIElementIsAttributeSettable, AXUIElementPerformAction, AXUIElementRef, AXUIElementSetAttributeValue,
+    AXUIElementSetMessagingTimeout, AXValueCreate, AXValueGetTypeID, AXValueGetValue, AXValueRef, AXValueType,
 };
 use core_foundation::array::CFArray;
 use core_foundation::base::{CFType, TCFType};
@@ -111,6 +111,13 @@ impl AxElement {
             return None;
         }
         Some(unsafe { AxElement::retained(raw as AXUIElementRef) })
+    }
+
+    pub fn is_settable(&self, attribute: &'static str) -> Option<bool> {
+        let name = CFString::from_static_string(attribute);
+        let mut settable = 0;
+        let err = unsafe { AXUIElementIsAttributeSettable(self.0, name.as_concrete_TypeRef(), &mut settable) };
+        (err == kAXErrorSuccess).then_some(settable != 0)
     }
 
     pub fn set_true(&self, attribute: &'static str) -> Result<(), AXError> {
