@@ -469,7 +469,8 @@ impl Engine {
         }
         // Windows of floating apps, and fixed-size ones, leave the layout;
         // ones it held go back on screen, since they may be parked or hidden:
-        // centred on the monitor showing them, or else the active one.
+        // centred on the monitor showing them, or else the active one. Only
+        // moved, at their own size, since fixed-size ones refuse any other.
         let floating: Vec<WindowId> = current
             .values()
             .filter(|w| {
@@ -484,7 +485,7 @@ impl Engine {
                 let workspace = self.workspaces.iter().position(|w| w.contains(id));
                 let monitor = self.monitors.iter().find(|m| Some(m.workspace) == workspace);
                 let area = monitor.unwrap_or(&self.monitors[self.active]).area;
-                released.push((id, centred(self.applier.get(id).unwrap_or(info.frame), area)));
+                released.push((id, centred(info.frame, area)));
                 self.applier.forget(id);
             }
         }
@@ -559,7 +560,7 @@ impl Engine {
             self.drop_window(point, focused, &fresh);
         }
         for (id, frame) in released {
-            match self.backend.set_frame(id, frame) {
+            match self.backend.set_position(id, frame.x, frame.y) {
                 Ok(()) | Err(BackendError::WindowNotFound(_)) => {}
                 Err(err) => return Err(err),
             }
@@ -1075,7 +1076,11 @@ mod tests {
         engine.command(Command::SwitchWorkspace(1)).unwrap();
         assert!(is_hidden(backend.frame_of(1).unwrap()));
 
-        backend.update(1, |w| w.is_resizable = false);
+        // It never took the column's height.
+        backend.update(1, |w| {
+            w.is_resizable = false;
+            w.frame.height = 300.0;
+        });
         engine.sync().unwrap();
         assert!(engine.workspace(0).unwrap().windows().next().is_none());
         assert_eq!(backend.frame_of(1).unwrap().x, SCREEN.x + (SCREEN.width - 300.0) / 2.0);

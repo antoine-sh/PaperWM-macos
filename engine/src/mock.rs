@@ -110,6 +110,10 @@ impl WindowBackend for MockBackend {
         if self.unresponsive.borrow().contains(&window.pid) {
             return Err(BackendError::Platform("app is not responding".into()));
         }
+        // Like a window whose AX size is not settable, which the frame write sets first.
+        if !window.is_resizable && (frame.width, frame.height) != (window.frame.width, window.frame.height) {
+            return Err(BackendError::Platform("size is not settable".into()));
+        }
         window.frame = frame;
         Ok(())
     }
