@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import ServiceManagement
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -11,6 +12,8 @@ struct SettingsView: View {
     @ObservedObject var recorder: ShortcutRecorder
 
     @State private var presetsText = ""
+    /// Read from macOS rather than stored, so it follows changes made in System Settings › Login Items.
+    @State private var launchAtLogin = Self.isLaunchAtLogin
 
     var body: some View {
         TabView {
@@ -21,11 +24,30 @@ struct SettingsView: View {
         }
         .padding()
         .frame(width: 620, height: 520)
-        .onAppear { presetsText = Self.format(settings.values.widthPresets) }
+        .onAppear {
+            presetsText = Self.format(settings.values.widthPresets)
+            launchAtLogin = Self.isLaunchAtLogin
+        }
+    }
+
+    /// Still on while it waits for approval in System Settings › Login Items.
+    private static var isLaunchAtLogin: Bool {
+        [.enabled, .requiresApproval].contains(SMAppService.mainApp.status)
     }
 
     private var layout: some View {
         Form {
+            Toggle("Launch at login", isOn: Binding(
+                get: { launchAtLogin },
+                set: { on in
+                    do {
+                        try on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+                    } catch {
+                        NSLog("PaperWM: launch at login: \(error)")
+                    }
+                    launchAtLogin = Self.isLaunchAtLogin
+                }
+            ))
             Stepper("Gap: \(Int(settings.values.gap)) pt", value: $settings.values.gap, in: 0...64, step: 2)
             Stepper("Scroll animation: \(Int((settings.values.animationDuration * 1000).rounded())) ms",
                     value: $settings.values.animationDuration, in: 0...1, step: 0.05)
