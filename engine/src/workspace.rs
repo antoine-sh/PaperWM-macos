@@ -20,6 +20,17 @@ pub struct Column {
     /// Shows only the focused window, at the column's full height, with the
     /// others behind it.
     tabbed: bool,
+    pinned: Option<Pin>,
+}
+
+/// The screen edge a pinned column stays at while the rest of the strip
+/// scrolls beside it. Pinned columns are kept at that end of the strip, so
+/// focusing left and right reaches them in screen order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Pin {
+    Left,
+    Right,
 }
 
 impl Column {
@@ -31,6 +42,7 @@ impl Column {
             width_before_full: None,
             heights: Vec::new(),
             tabbed: false,
+            pinned: None,
         }
     }
 
@@ -57,6 +69,10 @@ impl Column {
 
     pub fn is_tabbed(&self) -> bool {
         self.tabbed
+    }
+
+    pub fn pinned(&self) -> Option<Pin> {
+        self.pinned
     }
 }
 
@@ -127,6 +143,29 @@ impl Workspace {
         self.columns[..index].iter().map(|c| c.width + gap).sum()
     }
 
+    /// Width the column pinned at `pin` takes from the strip, gap included.
+    pub fn pin_margin(&self, pin: Pin, gap: f64) -> f64 {
+        self.columns.iter().find(|c| c.pinned == Some(pin)).map_or(0.0, |c| c.width + gap)
+    }
+
+    /// The left and right pin margins.
+    pub fn pin_margins(&self, gap: f64) -> (f64, f64) {
+        (self.pin_margin(Pin::Left, gap), self.pin_margin(Pin::Right, gap))
+    }
+
+    /// Shrinks the pins so they leave the strip at least a minimum-width
+    /// column, after a pin was widened or moved to a narrower monitor.
+    fn fit_pins(&mut self, viewport: f64, gap: f64) {
+        let (lead, trail) = self.pin_margins(gap);
+        let room = viewport - MIN_COLUMN_WIDTH;
+        if lead + trail <= room {
+            return;
+        }
+        for column in self.columns.iter_mut().filter(|c| c.pinned.is_some()) {
+            column.width = ((column.width + gap) / (lead + trail) * room - gap).max(MIN_COLUMN_WIDTH.min(viewport));
+        }
+    }
+
     fn strip_width(&self, gap: f64) -> f64 {
         let n = self.columns.len() as f64;
         self.columns.iter().map(|c| c.width).sum::<f64>() + gap * (n - 1.0).max(0.0)
@@ -144,6 +183,7 @@ impl Workspace {
         let index = index.min(self.columns.len());
         self.columns.insert(index, Column::new(id, clamp_width(width, viewport)));
         self.focused = index;
+        self.keep_pins_at_edges();
     }
 
     /// Puts `id` in place of column `target`, the columns in between
@@ -159,6 +199,7 @@ impl Workspace {
             let column = self.columns.remove(c);
             self.columns.insert(target, column);
             self.focused = target;
+            self.keep_pins_at_edges();
             return true;
         }
         let column = &mut self.columns[c];
@@ -172,6 +213,7 @@ impl Workspace {
         let index = if target > c { target + 1 } else { target };
         self.columns.insert(index, Column::new(id, width));
         self.focused = index;
+        self.keep_pins_at_edges();
         true
     }
 
@@ -230,6 +272,9 @@ impl Workspace {
     /// Swaps the focused column with its neighbour `delta` columns away.
     pub fn move_column(&mut self, delta: isize) -> bool {
         let Some(target) = self.offset(self.focused, delta, self.columns.len()) else { return false };
+        if self.columns[target].pinned != self.columns[self.focused].pinned {
+            return false;
+        }
         let column = self.columns.remove(self.focused);
         self.columns.insert(target, column);
         self.focused = target;
@@ -252,7 +297,8 @@ impl Workspace {
     /// focused column (PaperWM's "slurp").
     pub fn consume(&mut self) -> bool {
         let next = self.focused + 1;
-        if next >= self.columns.len() {
+        // A pin only goes away when the user unpins it or closes its windows.
+        if next >= self.columns.len() || self.columns[next].pinned.is_some() {
             return false;
         }
         let window = self.columns[next].windows.remove(0);
@@ -281,7 +327,48 @@ impl Workspace {
         let width = column.width;
         self.columns.insert(self.focused + 1, Column::new(window, width));
         self.focused += 1;
+        self.keep_pins_at_edges();
         true
+    }
+
+    /// Pins the focused column to `pin`'s edge in place of any column pinned
+    /// there, or unpins it if it is already there. Refused when the pins
+    /// would leave the strip less than a minimum-width column.
+    pub fn toggle_pin(&mut self, pin: Pin, viewport: f64, gap: f64) -> bool {
+        let Some(column) = self.columns.get(self.focused) else { return false };
+        if column.pinned == Some(pin) {
+            // Already at its end of the strip, where it stays.
+            self.columns[self.focused].pinned = None;
+            return true;
+        }
+        let other = if pin == Pin::Left { Pin::Right } else { Pin::Left };
+        let other_margin = if column.pinned == Some(other) { 0.0 } else { self.pin_margin(other, gap) };
+        if column.width + gap + other_margin > viewport - MIN_COLUMN_WIDTH {
+            return false;
+        }
+        for column in &mut self.columns {
+            if column.pinned == Some(pin) {
+                column.pinned = None;
+            }
+        }
+        self.columns[self.focused].pinned = Some(pin);
+        self.keep_pins_at_edges();
+        true
+    }
+
+    /// Moves pinned columns back to their ends of the strip, keeping focus
+    /// on the same column.
+    fn keep_pins_at_edges(&mut self) {
+        let focused = self.focused;
+        let mut tagged: Vec<(bool, Column)> =
+            std::mem::take(&mut self.columns).into_iter().enumerate().map(|(i, c)| (i == focused, c)).collect();
+        tagged.sort_by_key(|(_, c)| match c.pinned {
+            Some(Pin::Left) => 0,
+            None => 1,
+            Some(Pin::Right) => 2,
+        });
+        self.focused = tagged.iter().position(|&(f, _)| f).unwrap_or(0);
+        self.columns = tagged.into_iter().map(|(_, c)| c).collect();
     }
 
     /// Steps the focused column through `fractions` of the viewport.
@@ -367,17 +454,25 @@ impl Workspace {
         true
     }
 
-    /// Scrolls the least amount that shows the whole focused column. When
-    /// everything fits, the strip is kept flush left.
+    /// Scrolls the least amount that shows the whole focused column in the
+    /// width the pins leave. When everything fits, the strip is kept flush
+    /// left.
     pub fn ensure_focused_visible(&mut self, viewport: f64, gap: f64) {
         if self.columns.is_empty() {
             self.scroll = 0.0;
             self.centered = false;
             return;
         }
-        let x = self.column_x(self.focused, gap);
+        // Pins are always in view; the strip beside them just stays in range.
+        if self.columns[self.focused].pinned.is_some() {
+            self.scroll = self.scroll.min(self.strip_width(gap) - viewport).max(0.0);
+            return;
+        }
+        let (lead, trail) = self.pin_margins(gap);
+        let x = self.column_x(self.focused, gap) - lead;
         let width = self.columns[self.focused].width;
-        if self.centered && x >= self.scroll && x + width <= self.scroll + viewport {
+        let room = viewport - lead - trail;
+        if self.centered && x >= self.scroll && x + width <= self.scroll + room {
             return;
         }
         self.centered = false;
@@ -385,10 +480,10 @@ impl Workspace {
             self.scroll = 0.0;
             return;
         }
-        if width >= viewport || x < self.scroll {
+        if width >= room || x < self.scroll {
             self.scroll = x;
-        } else if x + width > self.scroll + viewport {
-            self.scroll = x + width - viewport;
+        } else if x + width > self.scroll + room {
+            self.scroll = x + width - room;
         }
         // Never leave empty space before the first column, e.g. after a pan.
         self.scroll = self.scroll.max(0.0);
@@ -396,11 +491,14 @@ impl Workspace {
 
     /// Brings the focused column into view the way `mode` asks.
     pub fn follow_focus(&mut self, mode: CenterFocus, viewport: f64, gap: f64) {
+        self.fit_pins(viewport, gap);
         let center = match mode {
             CenterFocus::Never => false,
             CenterFocus::OnOverflow => self.strip_width(gap) > viewport,
             CenterFocus::Always => !self.columns.is_empty(),
         };
+        // A pin is always in view, so only the strip's range is kept.
+        let center = center && self.columns[self.focused].pinned.is_none();
         if center {
             self.center_focused(viewport, gap);
             // Centred by the mode, not by request, so it ends with the mode.
@@ -410,11 +508,20 @@ impl Workspace {
         }
     }
 
+    /// Centres the focused column in the width the pins leave; pinned
+    /// columns stay where they are.
     pub fn center_focused(&mut self, viewport: f64, gap: f64) {
-        if let Some(column) = self.columns.get(self.focused) {
-            self.scroll = self.column_x(self.focused, gap) + column.width / 2.0 - viewport / 2.0;
+        if let Some(column) = self.columns.get(self.focused).filter(|c| c.pinned.is_none()) {
+            self.scroll = self.column_x(self.focused, gap) + column.width / 2.0 - self.strip_middle(viewport, gap);
             self.centered = true;
         }
+    }
+
+    /// How far right of the viewport's left edge the middle of the width
+    /// the pins leave is.
+    fn strip_middle(&self, viewport: f64, gap: f64) -> f64 {
+        let (lead, trail) = self.pin_margins(gap);
+        lead + (viewport - lead - trail) / 2.0
     }
 
     /// Pans the strip without changing focus, stopping half a viewport past
@@ -425,33 +532,43 @@ impl Workspace {
         self.centered = false;
     }
 
-    /// Strip x of the left edge of every column.
-    pub fn column_xs(&self, gap: f64) -> Vec<f64> {
+    /// Strip x of the left edge of every column, pinned ones where they
+    /// are shown at the current scroll.
+    pub fn column_xs(&self, viewport: f64, gap: f64) -> Vec<f64> {
         let mut x = 0.0;
         self.columns
             .iter()
             .map(|c| {
                 let left = x;
                 x += c.width + gap;
-                left
+                match c.pinned {
+                    Some(Pin::Left) => self.scroll,
+                    Some(Pin::Right) => self.scroll + viewport - c.width,
+                    None => left,
+                }
             })
             .collect()
     }
 
     /// The column under strip x `x`, or the nearest one; `None` for an
     /// empty strip.
-    pub fn column_at(&self, x: f64, gap: f64) -> Option<usize> {
-        let xs = self.column_xs(gap);
+    pub fn column_at(&self, x: f64, viewport: f64, gap: f64) -> Option<usize> {
+        let xs = self.column_xs(viewport, gap);
         let distance = |i: usize| (xs[i] - x).max(x - xs[i] - self.columns[i].width).max(0.0);
-        (0..self.columns.len()).min_by(|&a, &b| distance(a).total_cmp(&distance(b)))
+        let all = 0..self.columns.len();
+        // A pin covers the columns scrolled behind it.
+        let pin = all.clone().find(|&i| self.columns[i].pinned.is_some() && distance(i) == 0.0);
+        pin.or_else(|| all.min_by(|&a, &b| distance(a).total_cmp(&distance(b))))
     }
 
-    /// Focuses the column whose centre is closest to the viewport's.
+    /// Focuses the unpinned column whose centre is closest to the middle of
+    /// the width the pins leave.
     pub fn focus_nearest_centre(&mut self, viewport: f64, gap: f64) -> bool {
-        let middle = self.scroll + viewport / 2.0;
-        let xs = self.column_xs(gap);
+        let middle = self.scroll + self.strip_middle(viewport, gap);
+        let xs = self.column_xs(viewport, gap);
         let distance = |i: usize| (xs[i] + self.columns[i].width / 2.0 - middle).abs();
-        let Some(nearest) = (0..self.columns.len()).min_by(|&a, &b| distance(a).total_cmp(&distance(b))) else {
+        let unpinned = (0..self.columns.len()).filter(|&i| self.columns[i].pinned.is_none());
+        let Some(nearest) = unpinned.min_by(|&a, &b| distance(a).total_cmp(&distance(b))) else {
             return false;
         };
         let changed = nearest != self.focused;
@@ -535,11 +652,11 @@ mod tests {
     #[test]
     fn column_at_finds_the_column_under_or_nearest_a_point() {
         let ws = workspace(&[300.0, 300.0]);
-        assert_eq!(ws.column_at(-50.0, GAP), Some(0));
-        assert_eq!(ws.column_at(150.0, GAP), Some(0));
-        assert_eq!(ws.column_at(312.0, GAP), Some(1));
-        assert_eq!(ws.column_at(5000.0, GAP), Some(1));
-        assert_eq!(Workspace::default().column_at(0.0, GAP), None);
+        assert_eq!(ws.column_at(-50.0, VIEW, GAP), Some(0));
+        assert_eq!(ws.column_at(150.0, VIEW, GAP), Some(0));
+        assert_eq!(ws.column_at(312.0, VIEW, GAP), Some(1));
+        assert_eq!(ws.column_at(5000.0, VIEW, GAP), Some(1));
+        assert_eq!(Workspace::default().column_at(0.0, VIEW, GAP), None);
     }
 
     #[test]
@@ -813,8 +930,8 @@ mod tests {
     #[test]
     fn column_xs_lists_left_edges() {
         let ws = workspace(&[300.0, 400.0, 500.0]);
-        assert_eq!(ws.column_xs(GAP), vec![0.0, 310.0, 720.0]);
-        assert_eq!(ws.column_xs(GAP)[2], ws.column_x(2, GAP));
+        assert_eq!(ws.column_xs(VIEW, GAP), vec![0.0, 310.0, 720.0]);
+        assert_eq!(ws.column_xs(VIEW, GAP)[2], ws.column_x(2, GAP));
     }
 
     #[test]
@@ -850,6 +967,133 @@ mod tests {
         assert!(ws.focus_edge(true));
         assert_eq!(ws.focused_window(), Some(3));
         assert!(!Workspace::default().focus_edge(true));
+    }
+
+    fn pins(ws: &Workspace) -> Vec<Option<Pin>> {
+        ws.columns().iter().map(Column::pinned).collect()
+    }
+
+    #[test]
+    fn pinning_moves_the_column_to_its_edge_and_pinning_again_unpins() {
+        let mut ws = workspace(&[300.0, 300.0, 300.0]);
+        ws.focus_column(-1);
+        assert!(ws.toggle_pin(Pin::Left, VIEW, GAP));
+        assert_eq!(layout(&ws), vec![vec![2], vec![1], vec![3]]);
+        assert_eq!(pins(&ws), vec![Some(Pin::Left), None, None]);
+        assert_eq!(ws.focused_window(), Some(2));
+        assert!(ws.toggle_pin(Pin::Left, VIEW, GAP));
+        assert_eq!(pins(&ws), vec![None, None, None]);
+        assert!(!Workspace::default().toggle_pin(Pin::Right, VIEW, GAP));
+    }
+
+    #[test]
+    fn pinning_another_column_replaces_the_pin_on_that_side() {
+        let mut ws = workspace(&[300.0, 300.0, 300.0]);
+        ws.focus_window(2);
+        ws.toggle_pin(Pin::Left, VIEW, GAP);
+        ws.focus_window(3);
+        ws.toggle_pin(Pin::Left, VIEW, GAP);
+        assert_eq!(layout(&ws), vec![vec![3], vec![2], vec![1]]);
+        assert_eq!(pins(&ws), vec![Some(Pin::Left), None, None]);
+        ws.toggle_pin(Pin::Right, VIEW, GAP);
+        assert_eq!(layout(&ws), vec![vec![2], vec![1], vec![3]]);
+        assert_eq!(pins(&ws), vec![None, None, Some(Pin::Right)]);
+    }
+
+    #[test]
+    fn columns_stay_between_the_pins() {
+        let mut ws = workspace(&[300.0, 300.0]);
+        ws.toggle_pin(Pin::Right, VIEW, GAP);
+        ws.insert_window(3, 300.0, VIEW);
+        assert_eq!(layout(&ws), vec![vec![1], vec![3], vec![2]]);
+        assert_eq!(ws.focused_window(), Some(3));
+        assert!(!ws.move_column(1));
+        ws.focus_window(1);
+        assert!(ws.move_window_to(1, 2));
+        assert_eq!(layout(&ws), vec![vec![3], vec![1], vec![2]]);
+        // Focus still walks onto the pin.
+        assert!(ws.focus_column(1));
+        assert_eq!(ws.focused_window(), Some(2));
+    }
+
+    #[test]
+    fn pins_leave_room_for_the_strip() {
+        let mut ws = workspace(&[300.0, 600.0, 300.0]);
+        ws.focus_column(-1);
+        ws.toggle_full_width(VIEW);
+        assert!(!ws.toggle_pin(Pin::Left, VIEW, GAP));
+        let mut ws = workspace(&[500.0, 300.0, 500.0]);
+        assert!(ws.toggle_pin(Pin::Right, VIEW, GAP));
+        ws.focus_edge(false);
+        assert!(!ws.toggle_pin(Pin::Left, VIEW, GAP));
+        assert_eq!(pins(&ws), vec![None, None, Some(Pin::Right)]);
+    }
+
+    #[test]
+    fn pins_grown_past_the_room_are_shrunk_to_fit() {
+        let mut ws = workspace(&[300.0, 300.0, 300.0]);
+        ws.focus_edge(false);
+        ws.toggle_pin(Pin::Left, VIEW, GAP);
+        ws.toggle_full_width(VIEW);
+        ws.follow_focus(CenterFocus::Never, VIEW, GAP);
+        assert_eq!(ws.pin_margins(GAP), (VIEW - MIN_COLUMN_WIDTH, 0.0));
+    }
+
+    #[test]
+    fn centring_keeps_the_strip_in_range_while_a_pin_is_focused() {
+        let mut ws = workspace(&[300.0, 300.0, 300.0, 300.0, 300.0]);
+        ws.follow_focus(CenterFocus::Always, VIEW, GAP);
+        ws.toggle_pin(Pin::Left, VIEW, GAP);
+        ws.follow_focus(CenterFocus::Always, VIEW, GAP);
+        assert_eq!(ws.scroll(), 1540.0 - VIEW);
+    }
+
+    #[test]
+    fn consume_leaves_a_pin_alone() {
+        let mut ws = workspace(&[300.0, 300.0]);
+        ws.toggle_pin(Pin::Right, VIEW, GAP);
+        ws.focus_column(-1);
+        assert!(!ws.consume());
+        assert_eq!(layout(&ws), vec![vec![1], vec![2]]);
+    }
+
+    #[test]
+    fn the_strip_scrolls_in_the_width_beside_the_pins() {
+        let mut ws = workspace(&[300.0, 600.0, 600.0, 600.0]);
+        ws.focus_edge(false);
+        ws.toggle_pin(Pin::Left, VIEW, GAP);
+        ws.focus_edge(true);
+        ws.ensure_focused_visible(VIEW, GAP);
+        // Column 4 spans 1530..2130 and ends at the right of the viewport.
+        assert_eq!(ws.scroll(), 1130.0);
+        ws.focus_column(-2);
+        ws.ensure_focused_visible(VIEW, GAP);
+        // Column 2 starts at 310, just right of the 300 wide pin.
+        assert_eq!(ws.scroll(), 0.0);
+        ws.focus_column(1);
+        ws.center_focused(VIEW, GAP);
+        // Column 3's middle (1220) sits mid-way across the 690 left for the strip.
+        assert_eq!(ws.scroll(), 1220.0 - (310.0 + 345.0));
+        ws.focus_edge(false);
+        assert!(ws.focus_nearest_centre(VIEW, GAP));
+        assert_eq!(ws.focused_window(), Some(3));
+        ws.focus_edge(false);
+        let scroll = ws.scroll();
+        ws.ensure_focused_visible(VIEW, GAP);
+        assert_eq!(ws.scroll(), scroll);
+    }
+
+    #[test]
+    fn pins_report_where_they_are_shown_and_cover_the_strip_behind_them() {
+        let mut ws = workspace(&[300.0, 600.0, 600.0, 300.0]);
+        ws.toggle_pin(Pin::Right, VIEW, GAP);
+        ws.focus_edge(false);
+        ws.toggle_pin(Pin::Left, VIEW, GAP);
+        ws.scroll_by(200.0, VIEW, GAP);
+        assert_eq!(ws.column_xs(VIEW, GAP), vec![200.0, 310.0, 920.0, 200.0 + VIEW - 300.0]);
+        assert_eq!(ws.column_at(250.0, VIEW, GAP), Some(0));
+        assert_eq!(ws.column_at(1100.0, VIEW, GAP), Some(3));
+        assert_eq!(ws.column_at(600.0, VIEW, GAP), Some(1));
     }
 
     #[test]

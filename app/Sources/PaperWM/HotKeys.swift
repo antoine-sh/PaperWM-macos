@@ -98,6 +98,8 @@ struct HotKey {
             key("consume", "Pull Next Window into Column", kVK_ANSI_I, base, .engine(PWM_COMMAND_CONSUME)),
             key("expel", "Push Window out of Column", kVK_ANSI_O, base, .engine(PWM_COMMAND_EXPEL)),
             key("toggle-tabbed", "Toggle Tabbed Column", kVK_ANSI_T, shift, .engine(PWM_COMMAND_TOGGLE_TABBED)),
+            key("pin-left", "Pin Column to Left Edge", kVK_ANSI_P, base, .engine(PWM_COMMAND_TOGGLE_PIN_LEFT)),
+            key("pin-right", "Pin Column to Right Edge", kVK_ANSI_P, shift, .engine(PWM_COMMAND_TOGGLE_PIN_RIGHT)),
             key("taller", "Make Window Taller", kVK_ANSI_Equal, shift, .engine(PWM_COMMAND_TALLER)),
             key("shorter", "Make Window Shorter", kVK_ANSI_Minus, shift, .engine(PWM_COMMAND_SHORTER)),
             key("equal-heights", "Equalize Window Heights", kVK_ANSI_0, base, .engine(PWM_COMMAND_EQUAL_HEIGHTS)),

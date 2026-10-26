@@ -471,6 +471,8 @@ mod tests {
             ("WIDEN_COLUMN", Command::WidenColumn),
             ("NARROW_COLUMN", Command::NarrowColumn),
             ("TOGGLE_TABBED", Command::ToggleTabbed),
+            ("TOGGLE_PIN_LEFT", Command::TogglePinLeft),
+            ("TOGGLE_PIN_RIGHT", Command::TogglePinRight),
             ("TALLER", Command::Taller),
             ("SHORTER", Command::Shorter),
             ("EQUAL_HEIGHTS", Command::EqualHeights),
