@@ -1,5 +1,7 @@
 //! Turns a [`Workspace`] into window frames on a monitor.
 
+use std::collections::HashMap;
+
 use crate::backend::WindowId;
 use crate::geometry::Rect;
 use crate::workspace::Workspace;
@@ -10,13 +12,16 @@ pub const PEEK: f64 = 1.0;
 
 /// Frames for every window of `workspace`, scrolled to `scroll`, shown on a
 /// monitor whose usable area is `area`. Columns outside the viewport, or that would spill onto
-/// one of the `other_monitors`, are parked against an edge of `area`.
+/// one of the `other_monitors`, are parked against an edge of `area`. With
+/// `original_heights`, a window alone in its column keeps its height there,
+/// clamped to the area, instead of filling it.
 pub fn frames(
     workspace: &Workspace,
     scroll: f64,
     area: Rect,
     gap: f64,
     other_monitors: &[Rect],
+    original_heights: Option<&HashMap<WindowId, f64>>,
 ) -> Vec<(WindowId, Rect)> {
     let height = area.height - 2.0 * gap;
     let mut result = Vec::new();
@@ -27,7 +32,12 @@ pub fn frames(
         strip_x += column.width() + gap;
 
         let rows = column.windows().len() as f64;
-        let row_height = ((height - gap * (rows - 1.0)) / rows).max(1.0);
+        let mut row_height = ((height - gap * (rows - 1.0)) / rows).max(1.0);
+        if let (1, Some(&original)) =
+            (column.windows().len(), original_heights.and_then(|h| h.get(&column.windows()[0])))
+        {
+            row_height = original.clamp(1.0, row_height);
+        }
         let park = needs_parking(column_rect, area, other_monitors);
         for (i, &id) in column.windows().iter().enumerate() {
             let rect =
@@ -101,7 +111,7 @@ mod tests {
         let mut ws = workspace(&[400.0, 300.0]);
         ws.ensure_focused_visible(VIEW, GAP);
         assert_eq!(
-            frames(&ws, ws.scroll(), AREA, GAP, &[]),
+            frames(&ws, ws.scroll(), AREA, GAP, &[], None),
             vec![(1, Rect::new(10.0, 35.0, 400.0, 500.0)), (2, Rect::new(420.0, 35.0, 300.0, 500.0))]
         );
     }
@@ -111,7 +121,7 @@ mod tests {
         let mut ws = workspace(&[400.0, 400.0]);
         ws.focus_column(-1);
         ws.consume();
-        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[], None);
         assert_eq!(frames[0], (1, Rect::new(10.0, 35.0, 400.0, 245.0)));
         assert_eq!(frames[1], (2, Rect::new(10.0, 290.0, 400.0, 245.0)));
     }
@@ -121,7 +131,7 @@ mod tests {
         let mut ws = workspace(&[600.0, 600.0]);
         ws.focus_column(-1);
         ws.ensure_focused_visible(VIEW, GAP);
-        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[], None);
         assert_eq!(frames[1], (2, Rect::new(620.0, 35.0, 600.0, 500.0)));
     }
 
@@ -130,7 +140,7 @@ mod tests {
         let mut ws = workspace(&[900.0, 1000.0, 900.0]);
         ws.focus_column(-1);
         ws.ensure_focused_visible(VIEW, GAP);
-        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[], None);
         assert_eq!(frames[0].1.x, AREA.x - 900.0 + PEEK);
         assert_eq!(frames[1].1.x, 10.0);
         assert_eq!(frames[2].1.x, AREA.max_x() - PEEK);
@@ -142,7 +152,7 @@ mod tests {
         let mut ws = workspace(&[600.0, 600.0]);
         ws.focus_column(-1);
         ws.ensure_focused_visible(VIEW, GAP);
-        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[right_monitor]);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[right_monitor], None);
         // Column 2 would spill onto the right monitor, so it goes left instead.
         assert_eq!(frames[1].1.x, AREA.x - 600.0 + PEEK);
     }
@@ -153,7 +163,7 @@ mod tests {
         let mut ws = workspace(&[900.0, 900.0]);
         ws.focus_column(-1);
         ws.ensure_focused_visible(VIEW, GAP);
-        let frames = frames(&ws, ws.scroll(), AREA, GAP, &others);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &others, None);
         assert_eq!((frames[1].1.x, frames[1].1.y), (AREA.x, AREA.max_y() - PEEK));
     }
 }

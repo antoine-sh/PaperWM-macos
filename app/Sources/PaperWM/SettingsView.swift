@@ -34,6 +34,7 @@ struct SettingsView: View {
                 Text("When columns overflow the screen").tag(CenterFocus.onOverflow)
                 Text("Always").tag(CenterFocus.always)
             }
+            Toggle("Keep original height of single windows", isOn: $settings.values.keepOriginalHeight)
             TextField("Column widths (% of screen)", text: $presetsText)
                 .onSubmit {
                     if let presets = Self.parse(presetsText) { settings.values.widthPresets = presets }
