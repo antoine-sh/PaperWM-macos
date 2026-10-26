@@ -255,6 +255,15 @@ impl WindowBackend for AxBackend {
                 skipped.push(pid);
             }
         }
+        // On a fullscreen window's own Space every other window is off
+        // screen, not gone; their apps count as skipped until the user is back.
+        if windows.iter().any(|(z, w)| w.is_fullscreen && *z != usize::MAX) {
+            for cached in previous.values() {
+                if !present.contains(&cached.pid) && !skipped.contains(&cached.pid) {
+                    skipped.push(cached.pid);
+                }
+            }
+        }
         // Skipped apps' windows still exist; keep their handles for later.
         for (id, cached) in previous {
             if skipped.contains(&cached.pid) {
