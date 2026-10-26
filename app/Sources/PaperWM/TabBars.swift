@@ -22,10 +22,11 @@ final class TabBars {
         for monitor in state.monitors where state.workspaces.indices.contains(monitor.workspace) {
             let workspace = state.workspaces[monitor.workspace]
             let area = monitor.area.rect
-            for column in workspace.columns where column.tabbed && !column.windows.isEmpty {
+            for (index, column) in workspace.columns.enumerated() where column.tabbed && !column.windows.isEmpty {
                 let x = area.minX + state.gap + column.x - workspace.scroll
-                // Parked columns sit against the screen edge; a bar there would float on its own.
-                guard x >= area.minX, x + column.width <= area.maxX else { continue }
+                // Parked columns sit against the screen edge or under a pin; a bar there would float on its own.
+                guard x >= area.minX, x + column.width <= area.maxX,
+                      index == workspace.focusedColumn || !workspace.isUnderPin(column) else { continue }
                 let frame = CGRect(x: x, y: area.maxY - state.gap - Self.height, width: column.width,
                                    height: Self.height)
                 let tabs = column.windows.map { id in

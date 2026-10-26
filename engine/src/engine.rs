@@ -10,7 +10,7 @@ use crate::applier::FrameApplier;
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
 use crate::geometry::{Point, Rect};
 use crate::placement;
-use crate::workspace::{CenterFocus, Workspace};
+use crate::workspace::{CenterFocus, Pin, Workspace};
 
 /// Number of PaperWM workspaces.
 pub const WORKSPACE_COUNT: usize = 9;
@@ -149,6 +149,10 @@ pub enum Command {
     NarrowColumn,
     /// Switches the focused column between stacked and tabbed.
     ToggleTabbed,
+    /// Pins the focused column to the left edge, or unpins it.
+    TogglePinLeft,
+    /// Pins the focused column to the right edge, or unpins it.
+    TogglePinRight,
 }
 
 impl Command {
@@ -191,6 +195,8 @@ impl Command {
             31 => WidenColumn,
             32 => NarrowColumn,
             33 => ToggleTabbed,
+            34 => TogglePinLeft,
+            35 => TogglePinRight,
             _ => return None,
         })
     }
@@ -238,6 +244,8 @@ pub struct ColumnState {
     pub focused_row: usize,
     /// Only the focused window shows; the UI draws a tab bar for the rest.
     pub tabbed: bool,
+    /// The edge the column is pinned to, if any; its `x` is where it is shown.
+    pub pinned: Option<Pin>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -363,22 +371,26 @@ impl Engine {
             .workspaces
             .iter()
             .enumerate()
-            .map(|(i, ws)| WorkspaceState {
-                name: self.config.workspace_names.get(i).cloned().unwrap_or_default(),
-                scroll: ws.scroll(),
-                focused_column: ws.focused_column(),
-                columns: ws
-                    .columns()
-                    .iter()
-                    .zip(ws.column_xs(self.config.gap))
-                    .map(|(c, x)| ColumnState {
-                        x,
-                        width: c.width(),
-                        windows: c.windows().to_vec(),
-                        focused_row: c.focused_row(),
-                        tabbed: c.is_tabbed(),
-                    })
-                    .collect(),
+            .map(|(i, ws)| {
+                let monitor = self.monitors.iter().position(|m| m.workspace == i).unwrap_or(self.active);
+                WorkspaceState {
+                    name: self.config.workspace_names.get(i).cloned().unwrap_or_default(),
+                    scroll: ws.scroll(),
+                    focused_column: ws.focused_column(),
+                    columns: ws
+                        .columns()
+                        .iter()
+                        .zip(ws.column_xs(self.viewport(monitor), self.config.gap))
+                        .map(|(c, x)| ColumnState {
+                            x,
+                            width: c.width(),
+                            windows: c.windows().to_vec(),
+                            focused_row: c.focused_row(),
+                            tabbed: c.is_tabbed(),
+                            pinned: c.pinned(),
+                        })
+                        .collect(),
+                }
             })
             .collect();
         let windows: Vec<WindowState> = self
@@ -718,6 +730,8 @@ impl Engine {
                 raise.extend(ws.focused_window());
                 ws.toggle_tabbed()
             }
+            Command::TogglePinLeft => ws.toggle_pin(Pin::Left, viewport, gap),
+            Command::TogglePinRight => ws.toggle_pin(Pin::Right, viewport, gap),
         };
         if !matches!(command, Command::Center | Command::ScrollBy(_)) {
             self.ensure_visible_all();
@@ -950,7 +964,7 @@ impl Engine {
         }
         let gap = self.config.gap;
         let strip_x = point.x - self.monitors[monitor].area.x - gap + self.animator.shown(target);
-        let column = self.workspaces[target].column_at(strip_x, gap).unwrap_or(0);
+        let column = self.workspaces[target].column_at(strip_x, self.viewport(monitor), gap).unwrap_or(0);
         let moved = if source == target {
             self.workspaces[target].move_window_to(id, column)
         } else {
@@ -2148,6 +2162,27 @@ mod tests {
 
         engine.command(Command::FocusRight).unwrap();
         assert_eq!(engine.state().focused_window, Some(2));
+    }
+
+    #[test]
+    fn pin_commands_keep_a_column_at_the_screen_edge() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0), window(3, 800.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::FocusFirst).unwrap();
+        assert_eq!(engine.command(Command::TogglePinRight), Ok(true));
+        assert_eq!(columns(&engine), vec![vec![2], vec![3], vec![1]]);
+        assert_eq!(backend.frame_of(1).unwrap().x, SCREEN.max_x() - 8.0 - 300.0);
+        let state = engine.state();
+        let pinned = &state.workspaces[0].columns[2];
+        assert_eq!((pinned.pinned, pinned.x), (Some(Pin::Right), 700.0));
+        assert!(serde_json::to_string(&state).unwrap().contains(r#""pinned":"right""#));
+
+        assert_eq!(engine.command(Command::FocusLeft), Ok(true));
+        assert_eq!(backend.focused_window(), Some(3));
+        engine.command(Command::FocusRight).unwrap();
+        assert_eq!(engine.command(Command::TogglePinRight), Ok(true));
+        assert_eq!(engine.state().workspaces[0].columns[2].pinned, None);
     }
 
     #[test]

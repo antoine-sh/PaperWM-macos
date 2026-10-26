@@ -2,7 +2,7 @@
 
 use crate::backend::WindowId;
 use crate::geometry::Rect;
-use crate::workspace::Workspace;
+use crate::workspace::{Pin, Workspace};
 
 /// How much of a parked window stays on screen. macOS refuses to move a
 /// window completely off every display.
@@ -10,7 +10,9 @@ pub const PEEK: f64 = 1.0;
 
 /// Frames for every window of `workspace`, scrolled to `scroll`, shown on a
 /// monitor whose usable area is `area`. Columns outside the viewport, or that would spill onto
-/// one of the `other_monitors`, are parked against an edge of `area`.
+/// one of the `other_monitors`, are parked against an edge of `area`. Pinned
+/// columns stay at their edge, and the other columns scrolled under them are
+/// parked.
 pub fn frames(
     workspace: &Workspace,
     scroll: f64,
@@ -20,16 +22,25 @@ pub fn frames(
 ) -> Vec<(WindowId, Rect)> {
     let height = area.height - 2.0 * gap;
     let mut result = Vec::new();
+    let (lead, trail) = workspace.pin_margins(gap);
     let mut strip_x = 0.0;
-    for column in workspace.columns() {
-        let x = area.x + gap + strip_x - scroll;
+    for (index, column) in workspace.columns().iter().enumerate() {
+        let x = match column.pinned() {
+            Some(Pin::Left) => area.x + gap,
+            Some(Pin::Right) => area.max_x() - gap - column.width(),
+            None => area.x + gap + strip_x - scroll,
+        };
         let column_rect = Rect::new(x, area.y + gap, column.width(), height);
         strip_x += column.width() + gap;
 
         // A tabbed column lays its windows on top of each other.
         let rows = if column.is_tabbed() { 1.0 } else { column.windows().len() as f64 };
         let row_height = ((height - gap * (rows - 1.0)) / rows).max(1.0);
-        let park = needs_parking(column_rect, area, other_monitors);
+        // The focused column always shows, even when wider than the room between the pins.
+        let under_pin = column.pinned().is_none()
+            && index != workspace.focused_column()
+            && ((lead > 0.0 && x < area.x + lead) || (trail > 0.0 && column_rect.max_x() > area.max_x() - trail));
+        let park = under_pin || needs_parking(column_rect, area, other_monitors);
         for (i, &id) in column.windows().iter().enumerate() {
             let row = if column.is_tabbed() { 0.0 } else { i as f64 };
             let rect =
@@ -158,6 +169,41 @@ mod tests {
         let frames = frames(&ws, ws.scroll(), AREA, GAP, &[right_monitor]);
         // Column 2 would spill onto the right monitor, so it goes left instead.
         assert_eq!(frames[1].1.x, AREA.x - 600.0 + PEEK);
+    }
+
+    #[test]
+    fn pinned_columns_stay_at_their_edge_over_the_scrolled_strip() {
+        let mut ws = workspace(&[300.0, 600.0, 600.0]);
+        ws.focus_edge(false);
+        ws.toggle_pin(Pin::Left, VIEW, GAP);
+        ws.focus_edge(true);
+        ws.ensure_focused_visible(VIEW, GAP);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        assert_eq!(frames[0], (1, Rect::new(10.0, 35.0, 300.0, 500.0)));
+        // Column 2 slid under the pin, so it is parked rather than covering it.
+        assert_eq!(frames[1].1.x, AREA.x - 600.0 + PEEK);
+        assert_eq!(frames[2].1.x, 410.0);
+
+        let mut ws = workspace(&[600.0, 600.0, 300.0]);
+        ws.toggle_pin(Pin::Right, VIEW, GAP);
+        ws.focus_edge(false);
+        ws.ensure_focused_visible(VIEW, GAP);
+        let shown = super::frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        assert_eq!(shown[0].1.x, 10.0);
+        assert_eq!(shown[1].1.x, AREA.max_x() - PEEK);
+        assert_eq!(shown[2], (3, Rect::new(710.0, 35.0, 300.0, 500.0)));
+    }
+
+    #[test]
+    fn focused_column_wider_than_the_room_between_pins_stays_on_screen() {
+        let mut ws = workspace(&[300.0, 500.0, 300.0]);
+        ws.toggle_pin(Pin::Right, VIEW, GAP);
+        ws.focus_edge(false);
+        ws.toggle_pin(Pin::Left, VIEW, GAP);
+        ws.focus_column(1);
+        ws.ensure_focused_visible(VIEW, GAP);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        assert_eq!(frames[1], (2, Rect::new(320.0, 35.0, 500.0, 500.0)));
     }
 
     #[test]

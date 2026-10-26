@@ -471,6 +471,8 @@ mod tests {
             ("WIDEN_COLUMN", Command::WidenColumn),
             ("NARROW_COLUMN", Command::NarrowColumn),
             ("TOGGLE_TABBED", Command::ToggleTabbed),
+            ("TOGGLE_PIN_LEFT", Command::TogglePinLeft),
+            ("TOGGLE_PIN_RIGHT", Command::TogglePinRight),
         ];
         for (name, command) in commands {
             assert_eq!(Command::parse(value(&format!("PWM_COMMAND_{name}")), 1.0), Some(command), "{name}");
