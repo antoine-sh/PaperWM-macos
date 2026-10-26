@@ -11,6 +11,7 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 
 - **Scrolling strip**: every window opens as a new column to the right of the focused one, focusing a column slides the strip to bring it into view, and columns can be rearranged, resized and stacked from the keyboard. Dialogs, sheets and other non-standard windows float. A window in native fullscreen is left alone and keeps its column, and goes back into it when it leaves fullscreen. Columns that scroll off screen are parked at the screen edge, since macOS doesn't allow hiding windows entirely off screen.
 - **Drag to reorder**: drag a window by its title bar onto another column and let go: it takes that column's place and the strip rearranges around it. A window dragged out of a stack gets a column of its own, and dropping onto another monitor moves it into that monitor's strip.
+- **Native tabs**: a window with tabs (Finder, Terminal, Safari) is one column; opening, switching or closing tabs keeps it in place, and a tab dragged out into its own window gets a column of its own.
 - **Workspaces**: nine PaperWM workspaces, independent of macOS Spaces (keep everything on one Space). Each monitor shows one; the others' windows are tucked into a screen corner. Focusing a window that lives on a hidden workspace (⌘Tab, Dock, a click on a notification) brings its workspace in.
 - **Monitors**: focus or move windows to the monitor on the left or right.
 - **Scratch layer**: floating windows above the workspaces that you can show or hide together.
@@ -20,7 +21,7 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 - **Focus highlight**: optionally draw a colored border around the focused window and dim the windows behind it. Both are off by default; turn them on from the menu, Settings or their shortcuts. With Screen Recording permission the border matches each window's own rounded corners; otherwise it uses the corner radius set in Settings.
 - **App rules**: in Settings › Apps, pick an app from the running ones (or from the Applications folder) and either float it, so its windows are never tiled or moved and stay on every workspace like dialogs, or give it a fixed slot: its windows open at a set column of a set workspace. Apps are matched by name.
 - **Menu bar**: shows the current workspace's name; the menu switches workspaces, toggles the focus border and dimming, and opens Settings.
-- **Settings** (⌘, from the menu): gaps, column width presets, scroll animation length (0 turns it off), whether to keep the focused column centred (never, when the columns overflow the screen, or always), workspace names, app rules, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
+- **Settings** (⌘, from the menu): gaps, column width presets, the widen / narrow step, scroll animation length (0 turns it off), whether to keep the focused column centred (never, when the columns overflow the screen, or always), workspace names, app rules, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
 
 ### Keyboard shortcuts
 
@@ -34,6 +35,7 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 | ⌃⌥⇧ ← / → | Move the column left / right |
 | ⌃⌥⇧ ↑ / ↓ | Move the window up / down in its column |
 | ⌃⌥ R | Cycle column width (⅓, ½, ⅔ of the screen) |
+| ⌃⌥ = / - | Widen / narrow the column (by 10% of the screen; set the step in Settings) |
 | ⌃⌥ F | Toggle full width |
 | ⌃⌥ C | Center the column |
 | ⌃⌥ I | Pull the next column's window into this column |

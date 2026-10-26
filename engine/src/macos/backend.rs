@@ -203,6 +203,10 @@ impl WindowBackend for AxBackend {
                 }
             };
             let mut complete = true;
+            // Off-screen standard windows, which hide behind the shown tab of
+            // their native tab group at the same frame.
+            let mut hidden: Vec<(WindowId, Rect)> = Vec::new();
+            let first = windows.len();
             for element in app_windows {
                 let Some(id) = element.window_id() else { continue };
                 let values = match self.timed(pid, || element.values(&WINDOW_ATTRIBUTES)) {
@@ -216,29 +220,36 @@ impl WindowBackend for AxBackend {
                 };
                 let [position, size, title, subrole, minimized, fullscreen] = &values[..] else { continue };
                 let is_fullscreen = fullscreen.as_ref().and_then(as_bool).unwrap_or(false);
-                // Windows on other Spaces are neither on screen nor minimized,
-                // unless on their own fullscreen Space.
-                let (z_order, is_minimized) = match on_screen.get(&id) {
-                    Some(w) => (w.z_order, false),
-                    None if minimized.as_ref().and_then(as_bool).unwrap_or(false) => (usize::MAX, true),
-                    None if is_fullscreen => (usize::MAX, false),
-                    None => continue,
-                };
                 let is_standard = match previous.get(&id) {
                     Some(cached) => cached.is_standard,
                     None => subrole.as_ref().and_then(as_string).as_deref() == Some(kAXStandardWindowSubrole),
                 };
                 let origin = position.as_ref().and_then(as_point).unwrap_or_default();
                 let size = size.as_ref().and_then(as_size).unwrap_or_default();
+                let frame = Rect::new(origin.x, origin.y, size.width, size.height);
+                // Background tabs and windows on other Spaces are neither on
+                // screen nor minimized, unless on their own fullscreen Space.
+                let (z_order, is_minimized) = match on_screen.get(&id) {
+                    Some(w) => (w.z_order, false),
+                    None if minimized.as_ref().and_then(as_bool).unwrap_or(false) => (usize::MAX, true),
+                    None if is_fullscreen => (usize::MAX, false),
+                    None => {
+                        if is_standard {
+                            hidden.push((id, frame));
+                        }
+                        continue;
+                    }
+                };
                 let info = WindowInfo {
                     id,
                     pid,
                     app_name: app_name.to_owned(),
                     title: title.as_ref().and_then(as_string).unwrap_or_default(),
-                    frame: Rect::new(origin.x, origin.y, size.width, size.height),
+                    frame,
                     is_standard,
                     is_minimized,
                     is_fullscreen,
+                    tabs: Vec::new(),
                 };
                 if let Some(observer) = observers.get_mut(&pid) {
                     observer.watch_window(id, &element);
@@ -248,6 +259,11 @@ impl WindowBackend for AxBackend {
                     id,
                     CachedWindow { element, pid, is_standard, app_name: app_name.to_owned(), is_fullscreen },
                 );
+            }
+            // shortcut: a window on another Space at exactly a shown window's
+            // frame passes for its tab; read the tab group if that misleads.
+            for (_, info) in windows[first..].iter_mut().filter(|(_, w)| !w.is_minimized) {
+                info.tabs = hidden.iter().filter(|&&(_, frame)| frame == info.frame).map(|&(id, _)| id).collect();
             }
             if complete {
                 seen.insert(pid, ids);

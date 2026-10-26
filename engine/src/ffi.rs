@@ -468,6 +468,8 @@ mod tests {
             ("SCROLL_END", Command::ScrollEnd),
             ("FOCUS_FIRST", Command::FocusFirst),
             ("FOCUS_LAST", Command::FocusLast),
+            ("WIDEN_COLUMN", Command::WidenColumn),
+            ("NARROW_COLUMN", Command::NarrowColumn),
         ];
         for (name, command) in commands {
             assert_eq!(Command::parse(value(&format!("PWM_COMMAND_{name}")), 1.0), Some(command), "{name}");
