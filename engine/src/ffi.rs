@@ -468,6 +468,8 @@ mod tests {
             ("SCROLL_END", Command::ScrollEnd),
             ("FOCUS_FIRST", Command::FocusFirst),
             ("FOCUS_LAST", Command::FocusLast),
+            ("WIDEN_COLUMN", Command::WidenColumn),
+            ("NARROW_COLUMN", Command::NarrowColumn),
             ("TALLER", Command::Taller),
             ("SHORTER", Command::Shorter),
             ("EQUAL_HEIGHTS", Command::EqualHeights),
