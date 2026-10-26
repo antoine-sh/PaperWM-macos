@@ -113,11 +113,15 @@ impl AxElement {
         Some(unsafe { AxElement::retained(raw as AXUIElementRef) })
     }
 
-    pub fn is_settable(&self, attribute: &'static str) -> Option<bool> {
+    pub fn is_settable(&self, attribute: &'static str) -> Result<bool, AXError> {
         let name = CFString::from_static_string(attribute);
         let mut settable = 0;
         let err = unsafe { AXUIElementIsAttributeSettable(self.0, name.as_concrete_TypeRef(), &mut settable) };
-        (err == kAXErrorSuccess).then_some(settable != 0)
+        if err == kAXErrorSuccess {
+            Ok(settable != 0)
+        } else {
+            Err(err)
+        }
     }
 
     pub fn set_true(&self, attribute: &'static str) -> Result<(), AXError> {

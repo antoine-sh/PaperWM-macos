@@ -31,7 +31,8 @@ struct CachedWindow {
     pid: i32,
     /// The subrole and resizability never change, so they are read once per window.
     is_standard: bool,
-    is_resizable: bool,
+    /// `None` until the app answers, so a busy app is asked again later.
+    is_resizable: Option<bool>,
 }
 
 #[derive(Default)]
@@ -206,13 +207,14 @@ impl WindowBackend for AxBackend {
                     None if minimized.as_ref().and_then(as_bool).unwrap_or(false) => (usize::MAX, true),
                     None => continue,
                 };
-                let (is_standard, is_resizable) = match previous.get(&id) {
-                    Some(cached) => (cached.is_standard, cached.is_resizable),
-                    None => (
-                        subrole.as_ref().and_then(as_string).as_deref() == Some(kAXStandardWindowSubrole),
-                        // Only a definite "no" floats a window; a busy app keeps it tiled.
-                        element.is_settable(kAXSizeAttribute).unwrap_or(true),
-                    ),
+                let cached = previous.get(&id);
+                let is_standard = match cached {
+                    Some(cached) => cached.is_standard,
+                    None => subrole.as_ref().and_then(as_string).as_deref() == Some(kAXStandardWindowSubrole),
+                };
+                let is_resizable = match cached.and_then(|cached| cached.is_resizable) {
+                    Some(resizable) => Some(resizable),
+                    None => self.timed(pid, || element.is_settable(kAXSizeAttribute)).ok(),
                 };
                 let origin = position.as_ref().and_then(as_point).unwrap_or_default();
                 let size = size.as_ref().and_then(as_size).unwrap_or_default();
@@ -223,7 +225,8 @@ impl WindowBackend for AxBackend {
                     title: title.as_ref().and_then(as_string).unwrap_or_default(),
                     frame: Rect::new(origin.x, origin.y, size.width, size.height),
                     is_standard,
-                    is_resizable,
+                    // Only a definite "no" floats a window; a busy app keeps it tiled.
+                    is_resizable: is_resizable.unwrap_or(true),
                     is_minimized,
                 };
                 if let Some(observer) = observers.get_mut(&pid) {
