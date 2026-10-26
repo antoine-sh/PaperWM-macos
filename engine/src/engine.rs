@@ -469,8 +469,9 @@ impl Engine {
         }
         // Windows of floating apps, and fixed-size ones, leave the layout;
         // ones it held go back on screen, since they may be parked or hidden:
-        // centred on the monitor showing them, or else the active one. Only
-        // moved, at their own size, since fixed-size ones refuse any other.
+        // centred on the monitor showing them, or else the active one, at
+        // their own size. Fixed-size ones are only moved, since they refuse
+        // the size a whole frame sets first.
         let floating: Vec<WindowId> = current
             .values()
             .filter(|w| {
@@ -485,7 +486,7 @@ impl Engine {
                 let workspace = self.workspaces.iter().position(|w| w.contains(id));
                 let monitor = self.monitors.iter().find(|m| Some(m.workspace) == workspace);
                 let area = monitor.unwrap_or(&self.monitors[self.active]).area;
-                released.push((id, centred(info.frame, area)));
+                released.push((id, centred(info.frame, area), info.is_resizable));
                 self.applier.forget(id);
             }
         }
@@ -559,8 +560,13 @@ impl Engine {
             let focused = self.backend.focused_window();
             self.drop_window(point, focused, &fresh);
         }
-        for (id, frame) in released {
-            match self.backend.set_position(id, frame.x, frame.y) {
+        for (id, frame, resizable) in released {
+            let result = if resizable {
+                self.backend.set_frame(id, frame)
+            } else {
+                self.backend.set_position(id, frame.x, frame.y)
+            };
+            match result {
                 Ok(()) | Err(BackendError::WindowNotFound(_)) => {}
                 Err(err) => return Err(err),
             }
