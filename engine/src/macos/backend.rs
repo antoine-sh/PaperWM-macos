@@ -172,6 +172,9 @@ impl WindowBackend for AxBackend {
         let mut elements = HashMap::new();
         let mut windows = Vec::new();
         let mut skipped = Vec::new();
+        // Known windows of read apps that left the screen. They are reported
+        // only if the user turns out to be on a fullscreen window's Space.
+        let mut away: Vec<(WindowInfo, AxElement)> = Vec::new();
         for (pid, (app_name, ids)) in apps {
             if self.is_stalled(pid) {
                 // It may change unnoticed while busy, so it is read once back.
@@ -227,29 +230,35 @@ impl WindowBackend for AxBackend {
                 let origin = position.as_ref().and_then(as_point).unwrap_or_default();
                 let size = size.as_ref().and_then(as_size).unwrap_or_default();
                 let frame = Rect::new(origin.x, origin.y, size.width, size.height);
-                // Background tabs and windows on other Spaces are neither on
-                // screen nor minimized, unless on their own fullscreen Space.
-                let (z_order, is_minimized) = match on_screen.get(&id) {
-                    Some(w) => (w.z_order, false),
-                    None if minimized.as_ref().and_then(as_bool).unwrap_or(false) => (usize::MAX, true),
-                    None if is_fullscreen => (usize::MAX, false),
-                    None => {
-                        if is_standard {
-                            hidden.push((id, frame));
-                        }
-                        continue;
-                    }
-                };
-                let info = WindowInfo {
+                let mut info = WindowInfo {
                     id,
                     pid,
                     app_name: app_name.to_owned(),
                     title: title.as_ref().and_then(as_string).unwrap_or_default(),
                     frame,
                     is_standard,
-                    is_minimized,
+                    is_minimized: false,
                     is_fullscreen,
                     tabs: Vec::new(),
+                };
+                // Background tabs and windows on other Spaces are neither on
+                // screen nor minimized, unless on their own fullscreen Space.
+                let z_order = match on_screen.get(&id) {
+                    Some(w) => w.z_order,
+                    None if minimized.as_ref().and_then(as_bool).unwrap_or(false) => {
+                        info.is_minimized = true;
+                        usize::MAX
+                    }
+                    None if is_fullscreen => usize::MAX,
+                    None => {
+                        if is_standard {
+                            hidden.push((id, frame));
+                            if previous.contains_key(&id) {
+                                away.push((info, element));
+                            }
+                        }
+                        continue;
+                    }
                 };
                 if let Some(observer) = observers.get_mut(&pid) {
                     observer.watch_window(id, &element);
@@ -265,6 +274,8 @@ impl WindowBackend for AxBackend {
             for (_, info) in windows[first..].iter_mut().filter(|(_, w)| !w.is_minimized) {
                 info.tabs = hidden.iter().filter(|&&(_, frame)| frame == info.frame).map(|&(id, _)| id).collect();
             }
+            let tabs: Vec<WindowId> = windows[first..].iter().flat_map(|(_, w)| w.tabs.iter().copied()).collect();
+            away.retain(|(w, _)| w.pid != pid || !tabs.contains(&w.id));
             if complete {
                 seen.insert(pid, ids);
             } else {
@@ -272,8 +283,23 @@ impl WindowBackend for AxBackend {
             }
         }
         // On a fullscreen window's own Space every other window is off
-        // screen, not gone; their apps count as skipped until the user is back.
+        // screen, not gone: known ones of read apps are still reported, and
+        // other apps count as skipped until the user is back.
         if windows.iter().any(|(z, w)| w.is_fullscreen && *z != usize::MAX) {
+            for (info, element) in away {
+                if let Some(observer) = observers.get_mut(&info.pid) {
+                    observer.watch_window(info.id, &element);
+                }
+                let cached = CachedWindow {
+                    element,
+                    pid: info.pid,
+                    is_standard: info.is_standard,
+                    app_name: info.app_name.clone(),
+                    is_fullscreen: false,
+                };
+                elements.insert(info.id, cached);
+                windows.push((usize::MAX, info));
+            }
             for cached in previous.values() {
                 if !present.contains(&cached.pid) && !skipped.contains(&cached.pid) {
                     skipped.push(cached.pid);
