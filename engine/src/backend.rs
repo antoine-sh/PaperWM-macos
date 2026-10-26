@@ -20,6 +20,10 @@ pub struct WindowInfo {
     /// A regular document window, as opposed to a dialog, sheet, panel or popup.
     pub is_standard: bool,
     pub is_minimized: bool,
+    /// The background tabs of this window's native tab group (Finder,
+    /// Terminal, Safari). macOS makes each tab a window, but only the shown
+    /// one is listed and tiled; the others hide behind it at the same frame.
+    pub tabs: Vec<WindowId>,
 }
 
 impl WindowInfo {
@@ -56,6 +60,7 @@ pub trait WindowBackend {
     fn is_trusted(&self) -> bool;
 
     /// All windows of regular apps on the current Space, front to back.
+    /// Background tabs are left out and listed in their shown tab's `tabs`.
     fn windows(&self) -> Result<Vec<WindowInfo>>;
 
     /// Apps the last [`windows`](Self::windows) call did not read, because
