@@ -40,6 +40,10 @@ struct SettingsView: View {
                     if let presets = Self.parse(presetsText) { settings.values.widthPresets = presets }
                     presetsText = Self.format(settings.values.widthPresets)
                 }
+            Stepper("Widen / narrow step: \(Int((settings.values.widthStep * 100).rounded()))% of screen",
+                    value: $settings.values.widthStep, in: 0.05...0.5, step: 0.05)
+            Stepper("Taller / shorter step: \(Int((settings.values.heightStep * 100).rounded()))% of column",
+                    value: $settings.values.heightStep, in: 0.05...0.5, step: 0.05)
             Picker("Minimap", selection: $settings.values.minimapStyle) {
                 Text("Strip").tag(MinimapStyle.strip)
                 Text("App icon toolbar").tag(MinimapStyle.toolbar)
