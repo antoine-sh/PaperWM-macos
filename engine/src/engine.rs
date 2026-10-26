@@ -620,8 +620,24 @@ impl Engine {
             Command::MoveDown => ws.move_row(1),
             Command::CycleWidth => ws.cycle_width(&self.config.width_presets, viewport, gap),
             Command::ToggleFullWidth => ws.toggle_full_width(viewport),
-            Command::Consume => ws.consume(),
-            Command::Expel => ws.expel(),
+            Command::Consume => {
+                let changed = ws.consume();
+                // The pulled-in window may have come up above the active tab.
+                if changed && ws.columns()[ws.focused_column()].is_tabbed() {
+                    raise.extend(ws.focused_window());
+                }
+                changed
+            }
+            Command::Expel => {
+                let changed = ws.expel();
+                let source = &ws.columns()[ws.focused_column().saturating_sub(1)];
+                // The expelled window was the tab in front; bring up the one now active.
+                if changed && source.is_tabbed() {
+                    raise.push(source.focused_window());
+                    raise.extend(ws.focused_window());
+                }
+                changed
+            }
             Command::Center => {
                 ws.center_focused(viewport, gap);
                 true
@@ -1185,6 +1201,26 @@ mod tests {
         engine.command(Command::ToggleTabbed).unwrap();
         assert!(!engine.state().workspaces[0].columns[0].tabbed);
         assert_eq!(backend.frame_of(1).unwrap().height, 288.0);
+    }
+
+    #[test]
+    fn tabbed_column_keeps_its_active_tab_in_front_through_consume_and_expel() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0), window(3, 200.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::FocusFirst).unwrap();
+        engine.command(Command::ToggleTabbed).unwrap();
+        let before = backend.raised().len();
+        engine.command(Command::Consume).unwrap();
+        // The pulled-in window must not stay above the active tab.
+        assert_eq!(backend.raised()[before..], [1]);
+        engine.command(Command::Consume).unwrap();
+        engine.command(Command::FocusDown).unwrap();
+        engine.command(Command::Expel).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1, 3], vec![2]]);
+        // The column's new active tab comes to the front, then the expelled window takes focus.
+        assert_eq!(backend.raised()[backend.raised().len() - 2..], [3, 2]);
+        assert_eq!(backend.focused_window(), Some(2));
     }
 
     #[test]

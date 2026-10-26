@@ -16,6 +16,8 @@ pub struct MockBackend {
     focus_is_async: Cell<bool>,
     /// Apps whose windows `windows` leaves out, as if they were busy.
     unresponsive: RefCell<Vec<i32>>,
+    /// Every window `focus` raised, oldest first; the last is frontmost.
+    raised: RefCell<Vec<WindowId>>,
 }
 
 impl MockBackend {
@@ -74,6 +76,10 @@ impl MockBackend {
 
     pub fn set_frame_calls(&self) -> usize {
         self.set_frame_calls.get()
+    }
+
+    pub fn raised(&self) -> Vec<WindowId> {
+        self.raised.borrow().clone()
     }
 
     /// How often `focused_window` was asked, each two round trips on macOS.
@@ -137,6 +143,7 @@ impl WindowBackend for MockBackend {
         if !self.windows.borrow().iter().any(|w| w.id == id) {
             return Err(BackendError::WindowNotFound(id));
         }
+        self.raised.borrow_mut().push(id);
         if !self.focus_is_async.get() {
             self.focused.set(Some(id));
         }

@@ -49,7 +49,10 @@ final class TabBars {
             if let hosting = panel.contentView as? NSHostingView<TabBarView> {
                 hosting.rootView = bar.view
             } else {
-                panel.contentView = NSHostingView(rootView: bar.view)
+                let hosting = NSHostingView(rootView: bar.view)
+                // The bar takes the column's width; the view must not resize the panel to fit itself.
+                hosting.sizingOptions = []
+                panel.contentView = hosting
             }
             if panel.frame != bar.frame { panel.setFrame(bar.frame, display: true) }
             if !panel.isVisible { panel.orderFrontRegardless() }
