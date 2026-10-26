@@ -52,6 +52,8 @@ final class Settings: ObservableObject {
         /// Seconds the strip takes to scroll; 0 jumps.
         var animationDuration: Double = 0.25
         var centerFocused: CenterFocus = .never
+        /// A window alone in its column keeps its height instead of filling the screen.
+        var keepOriginalHeight = false
         /// Shortcut overrides by `HotKey.id`; missing ids use the default.
         var shortcuts: [String: KeyCombo] = [:]
         /// Draw a colored border around the focused window.
@@ -83,6 +85,8 @@ final class Settings: ObservableObject {
             animationDuration = try c.decodeIfPresent(Double.self, forKey: .animationDuration)
                 ?? defaults.animationDuration
             centerFocused = try c.decodeIfPresent(CenterFocus.self, forKey: .centerFocused) ?? defaults.centerFocused
+            keepOriginalHeight = try c.decodeIfPresent(Bool.self, forKey: .keepOriginalHeight)
+                ?? defaults.keepOriginalHeight
             shortcuts = try c.decodeIfPresent([String: KeyCombo].self, forKey: .shortcuts) ?? defaults.shortcuts
             focusBorder = try c.decodeIfPresent(Bool.self, forKey: .focusBorder) ?? defaults.focusBorder
             borderColor = try c.decodeIfPresent(String.self, forKey: .borderColor) ?? defaults.borderColor
@@ -140,6 +144,7 @@ final class Settings: ObservableObject {
             let animationDuration: Double
             let centerFocused: CenterFocus
             let appRules: [Rule]
+            let keepOriginalHeight: Bool
         }
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
@@ -149,7 +154,7 @@ final class Settings: ObservableObject {
         let config = Config(gap: values.gap, widthPresets: values.widthPresets, widthStep: values.widthStep,
                             heightStep: values.heightStep, workspaceNames: values.workspaceNames,
                             animationDuration: values.animationDuration, centerFocused: values.centerFocused,
-                            appRules: rules)
+                            appRules: rules, keepOriginalHeight: values.keepOriginalHeight)
         return (try? encoder.encode(config)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
     }
 

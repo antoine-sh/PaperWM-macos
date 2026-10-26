@@ -35,6 +35,9 @@ pub struct Config {
     /// How windows of particular apps are placed; the first rule naming an
     /// app wins.
     pub app_rules: Vec<AppRule>,
+    /// Lets a window alone in its column keep the height it had when first
+    /// tiled, top-aligned, instead of filling the screen height.
+    pub keep_original_height: bool,
 }
 
 /// Placement for every window of one app.
@@ -72,6 +75,7 @@ impl Default for Config {
             animation_duration: 0.25,
             center_focused: CenterFocus::Never,
             app_rules: Vec::new(),
+            keep_original_height: false,
         }
     }
 }
@@ -306,6 +310,8 @@ pub struct Engine {
     info: HashMap<WindowId, WindowInfo>,
     /// The scroll on screen for each workspace, sliding toward its target.
     animator: Animator,
+    /// Each window's height when it was first tiled, for `keep_original_height`.
+    original_heights: HashMap<WindowId, f64>,
 }
 
 impl Engine {
@@ -325,6 +331,7 @@ impl Engine {
             applier: FrameApplier::default(),
             info: HashMap::new(),
             animator: Animator::new(WORKSPACE_COUNT),
+            original_heights: HashMap::new(),
         }
     }
 
@@ -353,7 +360,9 @@ impl Engine {
     /// Replaces the settings, laying windows out again only when a setting
     /// that affects the layout changed.
     pub fn set_config(&mut self, config: Config) -> Result<()> {
-        let relayout = config.gap != self.config.gap || config.center_focused != self.config.center_focused;
+        let relayout = config.gap != self.config.gap
+            || config.center_focused != self.config.center_focused
+            || config.keep_original_height != self.config.keep_original_height;
         let resnap = relayout || config.animation_duration != self.config.animation_duration;
         let rules_changed = config.app_rules != self.config.app_rules;
         self.config = config;
@@ -543,6 +552,7 @@ impl Engine {
 
         self.scratch.retain(|(id, _)| self.info.contains_key(id));
         self.mru.retain(|id| self.info.contains_key(id));
+        self.original_heights.retain(|id, _| self.info.contains_key(id));
         if self.scratch_visible {
             // Keep wherever the user dragged them, but not a fullscreen frame.
             for (id, frame) in &mut self.scratch {
@@ -587,6 +597,7 @@ impl Engine {
                 }
             };
             let viewport = self.viewport(monitor);
+            self.original_heights.entry(id).or_insert(frame.height);
             let ws = &mut self.workspaces[index];
             let kept = keep.entry(index).or_insert(ws.focused_window());
             match slot {
@@ -1066,7 +1077,8 @@ impl Engine {
             let others: Vec<Rect> = areas.iter().enumerate().filter(|&(j, _)| j != i).map(|(_, &a)| a).collect();
             let workspace = &self.workspaces[monitor.workspace];
             let scroll = self.animator.shown(monitor.workspace);
-            frames.extend(placement::frames(workspace, scroll, monitor.area, self.config.gap, &others));
+            let heights = self.config.keep_original_height.then_some(&self.original_heights);
+            frames.extend(placement::frames(workspace, scroll, monitor.area, self.config.gap, &others, heights));
         }
         for (index, workspace) in self.workspaces.iter().enumerate() {
             if self.monitors.iter().any(|m| m.workspace == index) {
@@ -2041,6 +2053,30 @@ mod tests {
         backend.set_focused(Some(4));
         engine.sync().unwrap();
         assert_eq!(shown(&engine), vec![2]);
+    }
+
+    #[test]
+    fn keep_original_height_tops_single_windows_and_still_splits_stacks() {
+        let tall = MockBackend::window(3, Rect::new(800.0, 100.0, 300.0, 900.0));
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0), tall]);
+        engine.set_config(Config { keep_original_height: true, animation_duration: 0.0, ..Config::default() }).unwrap();
+        engine.sync().unwrap();
+        assert_eq!(backend.frame_of(1), Some(Rect::new(8.0, 33.0, 300.0, 300.0)));
+        // Taller than the usable area: clamped.
+        assert_eq!(backend.frame_of(3).unwrap().height, 584.0);
+
+        // The tiled frame is not taken as the new original height.
+        engine.set_config(Config { animation_duration: 0.0, ..Config::default() }).unwrap();
+        assert_eq!(backend.frame_of(1).unwrap().height, 584.0);
+        engine.set_config(Config { keep_original_height: true, animation_duration: 0.0, ..Config::default() }).unwrap();
+        assert_eq!(backend.frame_of(1).unwrap().height, 300.0);
+
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        engine.command(Command::Consume).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1, 2], vec![3]]);
+        assert_eq!(backend.frame_of(1), Some(Rect::new(8.0, 33.0, 300.0, 288.0)));
+        assert_eq!(backend.frame_of(2), Some(Rect::new(8.0, 329.0, 300.0, 288.0)));
     }
 
     #[test]

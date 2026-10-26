@@ -1,5 +1,7 @@
 //! Turns a [`Workspace`] into window frames on a monitor.
 
+use std::collections::HashMap;
+
 use crate::backend::WindowId;
 use crate::geometry::Rect;
 use crate::workspace::{Pin, Workspace};
@@ -12,13 +14,15 @@ pub const PEEK: f64 = 1.0;
 /// monitor whose usable area is `area`. Columns outside the viewport, or that would spill onto
 /// one of the `other_monitors`, are parked against an edge of `area`. Pinned
 /// columns stay at their edge, and the other columns scrolled under them are
-/// parked.
+/// parked. With `original_heights`, a window alone in its column keeps its
+/// height there, clamped to the area, instead of filling it.
 pub fn frames(
     workspace: &Workspace,
     scroll: f64,
     area: Rect,
     gap: f64,
     other_monitors: &[Rect],
+    original_heights: Option<&HashMap<WindowId, f64>>,
 ) -> Vec<(WindowId, Rect)> {
     let height = area.height - 2.0 * gap;
     let mut result = Vec::new();
@@ -40,6 +44,8 @@ pub fn frames(
             && ((lead > 0.0 && x < area.x + lead) || (trail > 0.0 && column_rect.max_x() > area.max_x() - trail));
         let park = under_pin || needs_parking(column_rect, area, other_monitors);
         let mut y = column_rect.y;
+        let original =
+            original_heights.filter(|_| column.windows().len() == 1).and_then(|h| h.get(&column.windows()[0]).copied());
         for (i, &id) in column.windows().iter().enumerate() {
             // A tabbed column lays its windows on top of each other.
             let rect = if column.is_tabbed() {
@@ -49,6 +55,10 @@ pub fn frames(
                 let rect = Rect::new(column_rect.x, y, column_rect.width, row_height);
                 y += row_height + gap;
                 rect
+            };
+            let rect = match original {
+                Some(h) => Rect { height: h.clamp(1.0, rect.height), ..rect },
+                None => rect,
             };
             result.push((id, if park { parked(rect, area, other_monitors) } else { rect }));
         }
@@ -119,7 +129,7 @@ mod tests {
         let mut ws = workspace(&[400.0, 300.0]);
         ws.ensure_focused_visible(VIEW, GAP);
         assert_eq!(
-            frames(&ws, ws.scroll(), AREA, GAP, &[]),
+            frames(&ws, ws.scroll(), AREA, GAP, &[], None),
             vec![(1, Rect::new(10.0, 35.0, 400.0, 500.0)), (2, Rect::new(420.0, 35.0, 300.0, 500.0))]
         );
     }
@@ -129,7 +139,7 @@ mod tests {
         let mut ws = workspace(&[400.0, 400.0]);
         ws.focus_column(-1);
         ws.consume();
-        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[], None);
         assert_eq!(frames[0], (1, Rect::new(10.0, 35.0, 400.0, 245.0)));
         assert_eq!(frames[1], (2, Rect::new(10.0, 290.0, 400.0, 245.0)));
     }
@@ -141,7 +151,7 @@ mod tests {
         ws.consume();
         // Rows share 490 points: 0.6 and 0.4 of it.
         ws.resize_row(0.1, 500.0, GAP);
-        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[], None);
         assert_eq!(frames[0], (1, Rect::new(10.0, 35.0, 400.0, 294.0)));
         assert_eq!(frames[1], (2, Rect::new(10.0, 339.0, 400.0, 196.0)));
     }
@@ -152,7 +162,7 @@ mod tests {
         ws.focus_column(-1);
         ws.consume();
         ws.toggle_tabbed();
-        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[], None);
         assert_eq!(frames[0], (1, Rect::new(10.0, 35.0, 400.0, 500.0)));
         assert_eq!(frames[1], (2, Rect::new(10.0, 35.0, 400.0, 500.0)));
     }
@@ -162,7 +172,7 @@ mod tests {
         let mut ws = workspace(&[600.0, 600.0]);
         ws.focus_column(-1);
         ws.ensure_focused_visible(VIEW, GAP);
-        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[], None);
         assert_eq!(frames[1], (2, Rect::new(620.0, 35.0, 600.0, 500.0)));
     }
 
@@ -171,7 +181,7 @@ mod tests {
         let mut ws = workspace(&[900.0, 1000.0, 900.0]);
         ws.focus_column(-1);
         ws.ensure_focused_visible(VIEW, GAP);
-        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[], None);
         assert_eq!(frames[0].1.x, AREA.x - 900.0 + PEEK);
         assert_eq!(frames[1].1.x, 10.0);
         assert_eq!(frames[2].1.x, AREA.max_x() - PEEK);
@@ -183,7 +193,7 @@ mod tests {
         let mut ws = workspace(&[600.0, 600.0]);
         ws.focus_column(-1);
         ws.ensure_focused_visible(VIEW, GAP);
-        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[right_monitor]);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[right_monitor], None);
         // Column 2 would spill onto the right monitor, so it goes left instead.
         assert_eq!(frames[1].1.x, AREA.x - 600.0 + PEEK);
     }
@@ -195,7 +205,7 @@ mod tests {
         ws.toggle_pin(Pin::Left, VIEW, GAP);
         ws.focus_edge(true);
         ws.ensure_focused_visible(VIEW, GAP);
-        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[], None);
         assert_eq!(frames[0], (1, Rect::new(10.0, 35.0, 300.0, 500.0)));
         // Column 2 slid under the pin, so it is parked rather than covering it.
         assert_eq!(frames[1].1.x, AREA.x - 600.0 + PEEK);
@@ -205,7 +215,7 @@ mod tests {
         ws.toggle_pin(Pin::Right, VIEW, GAP);
         ws.focus_edge(false);
         ws.ensure_focused_visible(VIEW, GAP);
-        let shown = super::frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        let shown = super::frames(&ws, ws.scroll(), AREA, GAP, &[], None);
         assert_eq!(shown[0].1.x, 10.0);
         assert_eq!(shown[1].1.x, AREA.max_x() - PEEK);
         assert_eq!(shown[2], (3, Rect::new(710.0, 35.0, 300.0, 500.0)));
@@ -219,7 +229,7 @@ mod tests {
         ws.toggle_pin(Pin::Left, VIEW, GAP);
         ws.focus_column(1);
         ws.ensure_focused_visible(VIEW, GAP);
-        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[], None);
         assert_eq!(frames[1], (2, Rect::new(320.0, 35.0, 500.0, 500.0)));
     }
 
@@ -229,7 +239,7 @@ mod tests {
         let mut ws = workspace(&[900.0, 900.0]);
         ws.focus_column(-1);
         ws.ensure_focused_visible(VIEW, GAP);
-        let frames = frames(&ws, ws.scroll(), AREA, GAP, &others);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &others, None);
         assert_eq!((frames[1].1.x, frames[1].1.y), (AREA.x, AREA.max_y() - PEEK));
     }
 }
