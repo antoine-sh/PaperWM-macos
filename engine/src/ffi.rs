@@ -470,6 +470,7 @@ mod tests {
             ("FOCUS_LAST", Command::FocusLast),
             ("WIDEN_COLUMN", Command::WidenColumn),
             ("NARROW_COLUMN", Command::NarrowColumn),
+            ("TOGGLE_TABBED", Command::ToggleTabbed),
             ("TALLER", Command::Taller),
             ("SHORTER", Command::Shorter),
             ("EQUAL_HEIGHTS", Command::EqualHeights),

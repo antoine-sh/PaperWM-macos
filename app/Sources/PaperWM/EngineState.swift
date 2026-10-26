@@ -23,6 +23,8 @@ struct EngineState: Decodable {
         let width: Double
         let windows: [UInt32]
         let focusedRow: Int
+        /// Only the focused window shows, with a tab bar for the column.
+        let tabbed: Bool
     }
 
     struct Workspace: Decodable {

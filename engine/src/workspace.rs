@@ -17,11 +17,21 @@ pub struct Column {
     /// Each window's share of the column height, summing to 1. Empty means
     /// equal shares, which is what any change to the stack goes back to.
     heights: Vec<f64>,
+    /// Shows only the focused window, at the column's full height, with the
+    /// others behind it.
+    tabbed: bool,
 }
 
 impl Column {
     fn new(window: WindowId, width: f64) -> Self {
-        Self { windows: vec![window], width, focused_row: 0, width_before_full: None, heights: Vec::new() }
+        Self {
+            windows: vec![window],
+            width,
+            focused_row: 0,
+            width_before_full: None,
+            heights: Vec::new(),
+            tabbed: false,
+        }
     }
 
     pub fn windows(&self) -> &[WindowId] {
@@ -43,6 +53,10 @@ impl Column {
     /// The share of the column height that window `row` gets.
     pub fn height_share(&self, row: usize) -> f64 {
         self.heights.get(row).copied().unwrap_or(1.0 / self.windows.len() as f64)
+    }
+
+    pub fn is_tabbed(&self) -> bool {
+        self.tabbed
     }
 }
 
@@ -296,10 +310,12 @@ impl Workspace {
     /// Grows the focused window by `step` of its column's `height`, or
     /// shrinks it for a negative step, taking from or giving to the other
     /// windows in the column. No window goes below [`MIN_ROW_HEIGHT`].
+    /// Tabbed columns keep their heights for when they stack again.
     pub fn resize_row(&mut self, step: f64, height: f64, gap: f64) -> bool {
         let Some(column) = self.columns.get_mut(self.focused) else { return false };
         let n = column.windows.len();
-        if n < 2 {
+        // A tabbed column shows each window at full height.
+        if n < 2 || column.tabbed {
             return false;
         }
         let rows = (height - gap * (n - 1) as f64).max(1.0);
@@ -341,6 +357,12 @@ impl Workspace {
                 column.width = viewport;
             }
         }
+        true
+    }
+
+    pub fn toggle_tabbed(&mut self) -> bool {
+        let Some(column) = self.columns.get_mut(self.focused) else { return false };
+        column.tabbed = !column.tabbed;
         true
     }
 
@@ -619,6 +641,23 @@ mod tests {
     }
 
     #[test]
+    fn toggle_tabbed_flips_the_focused_column_and_survives_stacking() {
+        let mut ws = workspace(&[300.0, 300.0, 300.0]);
+        ws.focus_window(1);
+        assert!(ws.toggle_tabbed());
+        assert!(ws.columns()[0].is_tabbed());
+        assert!(!ws.columns()[1].is_tabbed());
+        ws.consume();
+        ws.expel();
+        assert!(ws.columns()[0].is_tabbed());
+        assert!(!ws.columns()[1].is_tabbed());
+        ws.focus_window(2);
+        assert!(ws.toggle_tabbed());
+        assert!(!ws.columns()[0].is_tabbed());
+        assert!(!Workspace::default().toggle_tabbed());
+    }
+
+    #[test]
     fn consume_needs_a_column_on_the_right() {
         let mut ws = workspace(&[300.0]);
         assert!(!ws.consume());
@@ -894,6 +933,14 @@ mod tests {
         ws.focus_row(1);
         assert!(!ws.resize_row(-0.1, 300.0, GAP));
         assert_eq!(shares(&ws), vec![0.888, 0.112]);
+    }
+
+    #[test]
+    fn resizing_does_nothing_in_a_tabbed_column() {
+        let mut ws = stack_of_three();
+        ws.toggle_tabbed();
+        assert!(!ws.resize_row(0.1, 900.0, GAP));
+        assert_eq!(shares(&ws), vec![0.333, 0.333, 0.333]);
     }
 
     #[test]

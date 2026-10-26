@@ -59,9 +59,10 @@ typedef enum {
     PWM_COMMAND_FOCUS_LAST = 30,
     PWM_COMMAND_WIDEN_COLUMN = 31,
     PWM_COMMAND_NARROW_COLUMN = 32,
-    PWM_COMMAND_TALLER = 33,
-    PWM_COMMAND_SHORTER = 34,
-    PWM_COMMAND_EQUAL_HEIGHTS = 35,
+    PWM_COMMAND_TOGGLE_TABBED = 33,
+    PWM_COMMAND_TALLER = 34,
+    PWM_COMMAND_SHORTER = 35,
+    PWM_COMMAND_EQUAL_HEIGHTS = 36,
 } PwmCommand;
 
 // Top-left origin, y grows downwards (Accessibility coordinates).

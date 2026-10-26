@@ -30,9 +30,15 @@ pub fn frames(
         let park = needs_parking(column_rect, area, other_monitors);
         let mut y = column_rect.y;
         for (i, &id) in column.windows().iter().enumerate() {
-            let row_height = (rows * column.height_share(i)).max(1.0);
-            let rect = Rect::new(column_rect.x, y, column_rect.width, row_height);
-            y += row_height + gap;
+            // A tabbed column lays its windows on top of each other.
+            let rect = if column.is_tabbed() {
+                column_rect
+            } else {
+                let row_height = (rows * column.height_share(i)).max(1.0);
+                let rect = Rect::new(column_rect.x, y, column_rect.width, row_height);
+                y += row_height + gap;
+                rect
+            };
             result.push((id, if park { parked(rect, area, other_monitors) } else { rect }));
         }
     }
@@ -127,6 +133,17 @@ mod tests {
         let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
         assert_eq!(frames[0], (1, Rect::new(10.0, 35.0, 400.0, 294.0)));
         assert_eq!(frames[1], (2, Rect::new(10.0, 339.0, 400.0, 196.0)));
+    }
+
+    #[test]
+    fn tabbed_column_gives_every_window_the_full_column() {
+        let mut ws = workspace(&[400.0, 400.0]);
+        ws.focus_column(-1);
+        ws.consume();
+        ws.toggle_tabbed();
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[]);
+        assert_eq!(frames[0], (1, Rect::new(10.0, 35.0, 400.0, 500.0)));
+        assert_eq!(frames[1], (2, Rect::new(10.0, 35.0, 400.0, 500.0)));
     }
 
     #[test]
