@@ -2,6 +2,10 @@
 
 A port of [PaperWM](https://github.com/paperwm/PaperWM), the scrollable tiling window manager, to macOS.
 
+![PaperWM for macOS: focusing, moving, resizing and stacking columns, then switching workspace](docs/demo.gif)
+
+<sub>A scripted model of the layout, rendered by `scripts/demo-gif.py`; not a screen recording.</sub>
+
 The window-management engine is written in Rust and the user interface in Swift, bundled together as a single `.app`. It only needs Accessibility permission; System Integrity Protection stays on.
 
 ## Status
