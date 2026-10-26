@@ -88,10 +88,3 @@ cargo test
 | `app/` | Swift menu bar app (SwiftPM package): hot keys, settings, minimap, switcher, trackpad gestures, window drops, app and monitor tracking; links the engine as a static library |
 | `scripts/build-app.sh` | Builds both and assembles `build/PaperWM.app` |
 | `scripts/make-dmg.sh` | Packages the app as a `.dmg` |
-
-## Roadmap
-
-1. **Skeleton and proof of concept**: Rust engine, Swift shell, `.app` bundling, CI.
-2. **Core scrolling layout**: a horizontal strip of columns per workspace and monitor, keyboard focus and movement, resizing, one tile per window of multi-window apps, floating dialogs.
-3. **Feature parity** (done): hotkeys, workspaces, scratch layer, window switcher, trackpad gestures, workspace indicator, minimap, settings.
-4. **Packaging and polish**: Accessibility onboarding, launch at login, config file, signed and notarized releases.
