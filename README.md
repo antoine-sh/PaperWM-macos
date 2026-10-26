@@ -27,35 +27,67 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 
 ### Keyboard shortcuts
 
-⌃⌥ stands in for PaperWM's Super key and ⌃⌥⌘ for Super+Ctrl. All of these can be changed in Settings.
+⌃⌥ stands in for PaperWM's Super key. Within each group a key focuses or switches, and adding ⇧ takes the focused window along (or gives the opposite or vertical variant). Every shortcut uses keys found on laptop keyboards without Fn and at most three modifiers. All of them can be changed in Settings, where they are listed by the same groups.
+
+**Focus and move**
 
 | Shortcut | Action |
 | --- | --- |
 | ⌃⌥ ← / → | Focus the column on the left / right |
 | ⌃⌥ ↑ / ↓ | Focus the window above / below in the column |
-| ⌃⌥ Home / End | Focus the first / last column |
+| ⌃⌥⌘ ← / → | Focus the first / last column |
 | ⌃⌥⇧ ← / → | Move the column left / right |
 | ⌃⌥⇧ ↑ / ↓ | Move the window up / down in its column |
+
+**Workspaces**
+
+| Shortcut | Action |
+| --- | --- |
+| ⌃⌥ 1…9 | Switch to workspace 1…9 |
+| ⌃⌥⇧ 1…9 | Move the window to workspace 1…9 |
+| ⌃⌥ [ / ] | Previous / next workspace |
+| ⌃⌥⇧ [ / ] | Move the window to the previous / next workspace |
+| ⌃⌥ \` | Back to the last used workspace |
+
+**Monitors**
+
+| Shortcut | Action |
+| --- | --- |
+| ⌃⌥ , / . | Focus the monitor on the left / right |
+| ⌃⌥⇧ , / . | Move the window to the monitor on the left / right |
+
+**Size**
+
+| Shortcut | Action |
+| --- | --- |
 | ⌃⌥ R | Cycle column width (⅓, ½, ⅔ of the screen) |
-| ⌃⌥ = / - | Widen / narrow the column (by 10% of the screen; set the step in Settings) |
 | ⌃⌥ F | Toggle full width |
+| ⌃⌥ = / - | Widen / narrow the column (by 10% of the screen; set the step in Settings) |
+| ⌃⌥⇧ = / - | Make the window taller / shorter in its stacked column (by 10% of the column; set the step in Settings) |
+| ⌃⌥ E | Give every window in the column the same height |
+
+**Column layout**
+
+| Shortcut | Action |
+| --- | --- |
 | ⌃⌥ C | Center the column |
 | ⌃⌥ I | Pull the next column's window into this column |
 | ⌃⌥ O | Push the focused window out into its own column |
-| ⌃⌥⇧ T | Toggle the column between stacked and tabbed |
+| ⌃⌥ T | Toggle the column between stacked and tabbed |
 | ⌃⌥ P / ⌃⌥⇧ P | Pin the column to the left / right edge, or unpin it |
-| ⌃⌥⇧ = / - | Make the window taller / shorter in its stacked column (by 10% of the column; set the step in Settings) |
-| ⌃⌥ 0 | Give every window in the column the same height |
+
+**Switcher and scratch layer**
+
+| Shortcut | Action |
+| --- | --- |
 | ⌃⌥ Tab / ⌃⌥⇧ Tab | Switch windows (release ⌃⌥ to pick, ⌃⌥ Esc to cancel) |
-| ⌃⌥ 1…9 | Switch to workspace 1…9 |
-| ⌃⌥⇧ 1…9 | Move the window to workspace 1…9 |
-| ⌃⌥ PageDown / PageUp | Next / previous workspace |
-| ⌃⌥⇧ PageDown / PageUp | Move the window to the next / previous workspace |
-| ⌃⌥ \` | Back to the last used workspace |
-| ⌃⌥⌘ ← / → | Focus the monitor on the left / right |
-| ⌃⌥⌘⇧ ← / → | Move the window to the monitor on the left / right |
 | ⌃⌥ Esc | Show or hide the scratch layer |
 | ⌃⌥⇧ Esc | Move the window to or from the scratch layer |
+
+**Appearance**
+
+| Shortcut | Action |
+| --- | --- |
 | ⌃⌥ B | Show or hide the focus border |
 | ⌃⌥ D | Dim background windows on or off |
 
