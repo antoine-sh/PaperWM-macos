@@ -21,16 +21,28 @@ use crate::geometry::{Point, Rect, Size};
 const TIMED_OUT: Duration = Duration::from_millis((ax::MESSAGING_TIMEOUT * 800.0) as u64);
 /// How long to leave a busy app alone before asking it again.
 const BACK_OFF: Duration = Duration::from_secs(2);
+/// Not among `accessibility_sys`'s constants.
+const FULL_SCREEN_ATTRIBUTE: &str = "AXFullScreen";
 /// What `windows()` reads of each window, in one round trip. The subrole and
 /// minimized state are not always needed, but asking costs nothing extra.
-const WINDOW_ATTRIBUTES: [&str; 5] =
-    [kAXPositionAttribute, kAXSizeAttribute, kAXTitleAttribute, kAXSubroleAttribute, kAXMinimizedAttribute];
+const WINDOW_ATTRIBUTES: [&str; 6] = [
+    kAXPositionAttribute,
+    kAXSizeAttribute,
+    kAXTitleAttribute,
+    kAXSubroleAttribute,
+    kAXMinimizedAttribute,
+    FULL_SCREEN_ATTRIBUTE,
+];
 
 struct CachedWindow {
     element: AxElement,
     pid: i32,
     /// The subrole never changes, so it is read once per window.
     is_standard: bool,
+    app_name: String,
+    /// Its app is read even with nothing on screen, so a window on its own
+    /// fullscreen Space is still reported.
+    is_fullscreen: bool,
 }
 
 #[derive(Default)]
@@ -133,13 +145,18 @@ impl WindowBackend for AxBackend {
     fn windows(&self) -> Result<Vec<WindowInfo>> {
         let on_screen = window_list::on_screen_windows();
         let own_pid = std::process::id() as i32;
+        let previous = std::mem::take(&mut *self.elements.borrow_mut());
         // Apps without on-screen windows only have minimized windows or
-        // windows on other Spaces, none of which are tiled.
+        // windows on other Spaces, none of which are tiled, except windows
+        // in fullscreen, which keep their column.
         let mut apps: BTreeMap<i32, (&str, BTreeSet<WindowId>)> = BTreeMap::new();
         for (&id, w) in &on_screen {
             if w.pid != own_pid {
                 apps.entry(w.pid).or_insert((&w.owner_name, BTreeSet::new())).1.insert(id);
             }
+        }
+        for cached in previous.values().filter(|c| c.is_fullscreen) {
+            apps.entry(cached.pid).or_insert((&cached.app_name, BTreeSet::new()));
         }
 
         let present: BTreeSet<i32> = apps.keys().copied().collect();
@@ -151,7 +168,6 @@ impl WindowBackend for AxBackend {
         let everything = self.handler.everything.replace(false);
         let changed = std::mem::take(&mut *self.handler.changed.borrow_mut());
         let mut seen = std::mem::take(&mut *self.seen.borrow_mut());
-        let previous = std::mem::take(&mut *self.elements.borrow_mut());
         let mut observers = self.observers.borrow_mut();
         let mut elements = HashMap::new();
         let mut windows = Vec::new();
@@ -198,11 +214,14 @@ impl WindowBackend for AxBackend {
                     // The window closed meanwhile.
                     Err(_) => continue,
                 };
-                let [position, size, title, subrole, minimized] = &values[..] else { continue };
-                // Windows on other Spaces are neither on screen nor minimized.
+                let [position, size, title, subrole, minimized, fullscreen] = &values[..] else { continue };
+                let is_fullscreen = fullscreen.as_ref().and_then(as_bool).unwrap_or(false);
+                // Windows on other Spaces are neither on screen nor minimized,
+                // unless on their own fullscreen Space.
                 let (z_order, is_minimized) = match on_screen.get(&id) {
                     Some(w) => (w.z_order, false),
                     None if minimized.as_ref().and_then(as_bool).unwrap_or(false) => (usize::MAX, true),
+                    None if is_fullscreen => (usize::MAX, false),
                     None => continue,
                 };
                 let is_standard = match previous.get(&id) {
@@ -219,12 +238,16 @@ impl WindowBackend for AxBackend {
                     frame: Rect::new(origin.x, origin.y, size.width, size.height),
                     is_standard,
                     is_minimized,
+                    is_fullscreen,
                 };
                 if let Some(observer) = observers.get_mut(&pid) {
                     observer.watch_window(id, &element);
                 }
                 windows.push((z_order, info));
-                elements.insert(id, CachedWindow { element, pid, is_standard });
+                elements.insert(
+                    id,
+                    CachedWindow { element, pid, is_standard, app_name: app_name.to_owned(), is_fullscreen },
+                );
             }
             if complete {
                 seen.insert(pid, ids);

@@ -20,6 +20,9 @@ pub struct WindowInfo {
     /// A regular document window, as opposed to a dialog, sheet, panel or popup.
     pub is_standard: bool,
     pub is_minimized: bool,
+    /// In macOS native fullscreen, on a Space of its own. macOS owns its
+    /// frame until it leaves, so it keeps its column but is not moved.
+    pub is_fullscreen: bool,
 }
 
 impl WindowInfo {

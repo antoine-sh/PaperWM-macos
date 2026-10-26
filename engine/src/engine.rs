@@ -562,6 +562,9 @@ impl Engine {
                 continue;
             }
             for id in self.workspaces[monitor.workspace].windows().filter(|id| fresh.contains(id)) {
+                if self.info[&id].is_fullscreen {
+                    continue;
+                }
                 self.applier.observe(id, self.info[&id].frame);
             }
         }
@@ -953,6 +956,7 @@ impl Engine {
         for &(id, frame) in &self.scratch {
             frames.push((id, if self.scratch_visible { frame } else { placement::hidden_frame(frame, &areas) }));
         }
+        frames.retain(|(id, _)| !self.info.get(id).is_some_and(|w| w.is_fullscreen));
         self.applier.write(self.backend.as_ref(), frames)
     }
 }
@@ -1046,6 +1050,31 @@ mod tests {
         backend.update(1, |w| w.is_minimized = true);
         engine.sync().unwrap();
         assert!(columns(&engine).is_empty());
+    }
+
+    #[test]
+    fn leaves_fullscreen_windows_alone_and_puts_them_back_after() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        let tiled = backend.frame_of(1);
+        let full = Rect::new(0.0, 0.0, 1016.0, 625.0);
+        backend.update(1, |w| {
+            w.is_fullscreen = true;
+            w.frame = full;
+        });
+        engine.sync().unwrap();
+        engine.command(Command::FocusRight).unwrap();
+        engine.command(Command::SwitchWorkspace(1)).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+        assert_eq!(backend.frame_of(1), Some(full));
+
+        engine.command(Command::SwitchWorkspace(0)).unwrap();
+        backend.update(1, |w| {
+            w.is_fullscreen = false;
+            w.frame = Rect::new(0.0, 100.0, 300.0, 300.0);
+        });
+        engine.sync().unwrap();
+        assert_eq!(backend.frame_of(1), tiled);
     }
 
     #[test]
