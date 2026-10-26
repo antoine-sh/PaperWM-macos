@@ -88,6 +88,8 @@ struct StripView: View {
                     columnView(column, focused: index == workspace.focusedColumn, scale: scale)
                         .frame(width: column.width * scale, height: stripHeight)
                         .offset(x: column.x * scale)
+                        // Pins cover the columns scrolled behind them, as on screen.
+                        .zIndex(column.pinned == nil ? 0 : 1)
                 }
                 RoundedRectangle(cornerRadius: 6)
                     .stroke(Color.white.opacity(0.8), lineWidth: 2)

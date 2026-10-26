@@ -10,6 +10,7 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 
 
 - **Scrolling strip**: every window opens as a new column to the right of the focused one, focusing a column slides the strip to bring it into view, and columns can be rearranged, resized and stacked from the keyboard. Dialogs, sheets and other non-standard windows float. Columns that scroll off screen are parked at the screen edge, since macOS doesn't allow hiding windows entirely off screen.
+- **Pinned columns**: pin a column to the left or right edge of the screen; it stays there at full height while the rest of the strip scrolls in the width beside it. One pin per side per workspace; focus left and right still reaches it.
 - **Drag to reorder**: drag a window by its title bar onto another column and let go: it takes that column's place and the strip rearranges around it. A window dragged out of a stack gets a column of its own, and dropping onto another monitor moves it into that monitor's strip.
 - **Workspaces**: nine PaperWM workspaces, independent of macOS Spaces (keep everything on one Space). Each monitor shows one; the others' windows are tucked into a screen corner. Focusing a window that lives on a hidden workspace (⌘Tab, Dock, a click on a notification) brings its workspace in.
 - **Monitors**: focus or move windows to the monitor on the left or right.
@@ -38,6 +39,7 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 | ⌃⌥ C | Center the column |
 | ⌃⌥ I | Pull the next column's window into this column |
 | ⌃⌥ O | Push the focused window out into its own column |
+| ⌃⌥ P / ⌃⌥⇧ P | Pin the column to the left / right edge, or unpin it |
 | ⌃⌥ Tab / ⌃⌥⇧ Tab | Switch windows (release ⌃⌥ to pick, ⌃⌥ Esc to cancel) |
 | ⌃⌥ 1…9 | Switch to workspace 1…9 |
 | ⌃⌥⇧ 1…9 | Move the window to workspace 1…9 |

@@ -23,6 +23,8 @@ struct EngineState: Decodable {
         let width: Double
         let windows: [UInt32]
         let focusedRow: Int
+        /// "left" or "right" when pinned to that screen edge; `x` is then where it is shown.
+        let pinned: String?
     }
 
     struct Workspace: Decodable {

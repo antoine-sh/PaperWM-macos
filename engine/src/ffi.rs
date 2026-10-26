@@ -468,6 +468,8 @@ mod tests {
             ("SCROLL_END", Command::ScrollEnd),
             ("FOCUS_FIRST", Command::FocusFirst),
             ("FOCUS_LAST", Command::FocusLast),
+            ("TOGGLE_PIN_LEFT", Command::TogglePinLeft),
+            ("TOGGLE_PIN_RIGHT", Command::TogglePinRight),
         ];
         for (name, command) in commands {
             assert_eq!(Command::parse(value(&format!("PWM_COMMAND_{name}")), 1.0), Some(command), "{name}");
