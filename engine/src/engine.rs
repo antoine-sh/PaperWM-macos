@@ -480,13 +480,20 @@ impl Engine {
             }
         }
         self.info = current;
+        // macOS resizes fullscreen windows itself, so what was written last
+        // says nothing about where they are when they come back.
+        for w in self.info.values().filter(|w| w.is_fullscreen) {
+            self.applier.forget(w.id);
+        }
 
         self.scratch.retain(|(id, _)| self.info.contains_key(id));
         self.mru.retain(|id| self.info.contains_key(id));
         if self.scratch_visible {
-            // Keep wherever the user dragged them.
+            // Keep wherever the user dragged them, but not a fullscreen frame.
             for (id, frame) in &mut self.scratch {
-                *frame = self.info[id].frame;
+                if !self.info[id].is_fullscreen {
+                    *frame = self.info[id].frame;
+                }
             }
         }
         let mut managed: HashSet<WindowId> = self.scratch.iter().map(|&(id, _)| id).collect();
@@ -562,9 +569,6 @@ impl Engine {
                 continue;
             }
             for id in self.workspaces[monitor.workspace].windows().filter(|id| fresh.contains(id)) {
-                if self.info[&id].is_fullscreen {
-                    continue;
-                }
                 self.applier.observe(id, self.info[&id].frame);
             }
         }
@@ -1447,6 +1451,25 @@ mod tests {
         assert_eq!(engine.command(Command::ToggleScratch), Ok(true));
         assert_eq!(backend.frame_of(2), Some(Rect::new(100.0, 100.0, 400.0, 300.0)));
         assert_eq!(backend.focused_window(), Some(2));
+    }
+
+    #[test]
+    fn scratch_window_keeps_its_frame_through_fullscreen() {
+        let (mut engine, backend) = engine_with_scratch();
+        let frame = Rect::new(100.0, 100.0, 400.0, 300.0);
+        backend.update(2, |w| w.frame = frame);
+        engine.sync().unwrap();
+        backend.update(2, |w| {
+            w.is_fullscreen = true;
+            w.frame = Rect::new(0.0, 0.0, 1016.0, 625.0);
+        });
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.command(Command::ToggleScratch).unwrap();
+        backend.update(2, |w| w.is_fullscreen = false);
+        engine.sync().unwrap();
+        engine.command(Command::ToggleScratch).unwrap();
+        assert_eq!(backend.frame_of(2), Some(frame));
     }
 
     #[test]
