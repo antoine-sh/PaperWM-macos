@@ -9,8 +9,6 @@
   A port of <a href="https://github.com/paperwm/PaperWM">PaperWM</a>, the scrollable tiling window manager, to macOS.
 </p>
 
----
-
 ![PaperWM for macOS: focusing, moving, resizing and stacking columns, then switching workspace](docs/demo.gif)
 
 <sub>A scripted model of the layout, rendered by `scripts/demo-gif.py`; not a screen recording.</sub>
