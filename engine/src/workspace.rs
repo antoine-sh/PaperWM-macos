@@ -343,9 +343,10 @@ impl Workspace {
         true
     }
 
-    /// Gives every window in the focused column the same height.
+    /// Gives every window in the focused column the same height, unless it
+    /// is tabbed.
     pub fn equalize_rows(&mut self) -> bool {
-        self.columns.get_mut(self.focused).is_some_and(|c| !std::mem::take(&mut c.heights).is_empty())
+        self.columns.get_mut(self.focused).is_some_and(|c| !c.tabbed && !std::mem::take(&mut c.heights).is_empty())
     }
 
     pub fn toggle_full_width(&mut self, viewport: f64) -> bool {
@@ -936,11 +937,14 @@ mod tests {
     }
 
     #[test]
-    fn resizing_does_nothing_in_a_tabbed_column() {
+    fn resizing_and_equalizing_do_nothing_in_a_tabbed_column() {
         let mut ws = stack_of_three();
+        ws.resize_row(0.1, 900.0, GAP);
         ws.toggle_tabbed();
         assert!(!ws.resize_row(0.1, 900.0, GAP));
-        assert_eq!(shares(&ws), vec![0.333, 0.333, 0.333]);
+        assert!(!ws.equalize_rows());
+        ws.toggle_tabbed();
+        assert_eq!(shares(&ws), vec![0.433, 0.283, 0.283]);
     }
 
     #[test]
