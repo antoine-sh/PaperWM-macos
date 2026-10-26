@@ -1,16 +1,38 @@
-# PaperWM for macOS
+<p align="center">
+  <img src="app/Resources/AppIcon.svg" width="160" alt="PaperWM icon: a smiling sheet of paper between two columns">
+</p>
 
-A port of [PaperWM](https://github.com/paperwm/PaperWM), the scrollable tiling window manager, to macOS.
+<h1 align="center">PaperWM for macOS</h1>
 
-The window-management engine is written in Rust and the user interface in Swift, bundled together as a single `.app`. It only needs Accessibility permission; System Integrity Protection stays on.
+<p align="center">
+  Your windows, laid out side by side on an endless strip of paper.<br>
+  A port of <a href="https://github.com/paperwm/PaperWM">PaperWM</a>, the scrollable tiling window manager, to macOS.
+</p>
 
-## Status
+---
 
-Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tested by hand on a real Mac.
+Every new window opens as a column to the right of the one you're on. Move along the strip with the keyboard or
+the trackpad, and the strip slides to bring the window you want into view. Nothing overlaps, nothing shrinks to
+fit, and you never drag a window into place again.
 
+- 🦀 A Rust engine and a Swift menu bar app, shipped as one `.app`
+- 🔐 Needs only Accessibility permission; System Integrity Protection stays on
+- 🧪 Built and unit-tested in CI, but **not yet tested by hand on a real Mac**: expect rough edges
+
+## ✨ Highlights
+
+- 📜 **Scrolling strip** of columns you can rearrange, resize, stack and tab from the keyboard
+- 🗂️ **Nine workspaces** per monitor, independent of macOS Spaces
+- 🖐️ **Trackpad panning** and **drag to reorder** with the mouse
+- 🔀 **Window switcher** with live previews, and a **minimap** of the strip
+- 📌 **Pinned columns**, a **scratch layer** for floating windows, and **app rules**
+- ⚙️ **Settings** for gaps, widths, animations, colours, and every shortcut
+
+<details>
+<summary><b>All features in detail</b></summary>
 
 - **Scrolling strip**: every window opens as a new column to the right of the focused one, focusing a column slides the strip to bring it into view, and columns can be rearranged, resized and stacked from the keyboard. Dialogs, sheets, other non-standard windows and fixed-size windows such as Calculator float. A window in native fullscreen is left alone and keeps its column, and goes back into it when it leaves fullscreen. Columns that scroll off screen are parked at the screen edge, since macOS doesn't allow hiding windows entirely off screen.
-- **Tabbed columns**: ⌃⌥⇧T turns the focused column's stack into tabs: only the active window shows, at the column's full height, with the others behind it. A small tab bar along the bottom of the column lists its windows; click a tab, or use ⌃⌥↑/↓, to switch.
+- **Tabbed columns**: ⌃⌥T turns the focused column's stack into tabs: only the active window shows, at the column's full height, with the others behind it. A small tab bar along the bottom of the column lists its windows; click a tab, or use ⌃⌥↑/↓, to switch.
 - **Pinned columns**: pin a column to the left or right edge of the screen; it stays there at full height while the rest of the strip scrolls in the width beside it. One pin per side per workspace, and pins always leave room for a narrow column beside them; focus left and right still reaches a pin.
 - **Drag to reorder**: drag a window by its title bar onto another column and let go: it takes that column's place and the strip rearranges around it. A window dragged out of a stack gets a column of its own, and dropping onto another monitor moves it into that monitor's strip.
 - **Native tabs**: a window with tabs (Finder, Terminal, Safari) is one column; opening, switching or closing tabs keeps it in place, and a tab dragged out into its own window gets a column of its own.
@@ -25,7 +47,9 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 - **Menu bar**: shows the current workspace's name; the menu switches workspaces, toggles the focus border and dimming, and opens Settings.
 - **Settings** (⌘, from the menu): launch at login, gaps, column width presets, the widen / narrow step, scroll animation length (0 turns it off), whether to keep the focused column centred (never, when the columns overflow the screen, or always), keep original height (off by default: a window alone in its column keeps the height it had when first tiled, top-aligned, instead of filling the screen; stacked columns still split the full height), workspace names, app rules, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
 
-### Keyboard shortcuts
+</details>
+
+## ⌨️ Keyboard shortcuts
 
 ⌃⌥ stands in for PaperWM's Super key. Within each group a key focuses or switches, and adding ⇧ takes the focused window along (or gives the opposite or vertical variant). Every shortcut uses keys found on laptop keyboards without Fn and at most three modifiers. All of them can be changed in Settings, where they are listed by the same groups.
 
@@ -91,12 +115,12 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 | ⌃⌥ B | Show or hide the focus border |
 | ⌃⌥ D | Dim background windows on or off |
 
-### Permissions
+## 🔑 Permissions
 
 - **Accessibility** (required): to move, resize and focus windows, and to read the trackpad while ⌃⌥ is held.
 - **Screen Recording** (optional): for window previews in the switcher, and to match the focus border to each window's rounded corners. macOS asks the first time you open the switcher.
 
-## Building
+## 🛠️ Building
 
 Requirements: macOS 14 or later, Xcode 15 or later (for Swift), and Rust via [rustup](https://rustup.rs).
 
@@ -118,7 +142,7 @@ Engine tests run anywhere, including Linux:
 cargo test
 ```
 
-## Layout
+## 🗺️ Layout
 
 | Path | Contents |
 | --- | --- |
