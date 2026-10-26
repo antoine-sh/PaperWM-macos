@@ -42,6 +42,7 @@ impl MockBackend {
             frame,
             is_standard: true,
             is_minimized: false,
+            is_fullscreen: false,
             tabs: Vec::new(),
         }
     }
