@@ -10,7 +10,7 @@ use crate::applier::FrameApplier;
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
 use crate::geometry::{Point, Rect};
 use crate::placement;
-use crate::workspace::{CenterFocus, Workspace};
+use crate::workspace::{CenterFocus, Pin, Workspace};
 
 /// Number of PaperWM workspaces.
 pub const WORKSPACE_COUNT: usize = 9;
@@ -22,6 +22,10 @@ pub struct Config {
     pub gap: f64,
     /// Column widths `CycleWidth` steps through, as fractions of the screen.
     pub width_presets: Vec<f64>,
+    /// Share of the screen `WidenColumn` and `NarrowColumn` add or take away.
+    pub width_step: f64,
+    /// Share of a stacked column's height `Taller` and `Shorter` move.
+    pub height_step: f64,
     /// One name per workspace.
     pub workspace_names: Vec<String>,
     /// Seconds the strip takes to slide to a new scroll position; 0 jumps.
@@ -62,6 +66,8 @@ impl Default for Config {
         Self {
             gap: 8.0,
             width_presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0],
+            width_step: 0.1,
+            height_step: 0.1,
             workspace_names: (1..=WORKSPACE_COUNT).map(|i| i.to_string()).collect(),
             animation_duration: 0.25,
             center_focused: CenterFocus::Never,
@@ -76,10 +82,10 @@ impl Config {
         self.app_rules.iter().find(|r| r.app == app)
     }
 
-    /// Parses the app's settings; missing or empty fields take their
-    /// defaults. Returns `None` for malformed JSON or a negative gap or
-    /// animation duration. Rules naming a workspace that does not exist are
-    /// dropped.
+    /// Parses the app's settings; missing or empty fields, and a width or
+    /// height step that is not positive, take their defaults. Returns `None` for
+    /// malformed JSON or a negative gap or animation duration. Rules naming a
+    /// workspace that does not exist are dropped.
     pub fn from_json(json: &str) -> Option<Self> {
         let mut config: Config = serde_json::from_str(json).ok()?;
         if !(config.gap >= 0.0 && config.animation_duration >= 0.0) {
@@ -88,6 +94,12 @@ impl Config {
         let defaults = Config::default();
         if config.width_presets.is_empty() {
             config.width_presets = defaults.width_presets;
+        }
+        if config.width_step <= 0.0 {
+            config.width_step = defaults.width_step;
+        }
+        if config.height_step <= 0.0 {
+            config.height_step = defaults.height_step;
         }
         config.workspace_names.truncate(WORKSPACE_COUNT);
         let have = config.workspace_names.len();
@@ -138,6 +150,20 @@ pub enum Command {
     ScrollEnd,
     FocusFirst,
     FocusLast,
+    /// Widens the focused column by `Config::width_step` of the screen.
+    WidenColumn,
+    NarrowColumn,
+    /// Switches the focused column between stacked and tabbed.
+    ToggleTabbed,
+    /// Pins the focused column to the left edge, or unpins it.
+    TogglePinLeft,
+    /// Pins the focused column to the right edge, or unpins it.
+    TogglePinRight,
+    /// Grows the focused window by `Config::height_step` of its stacked column.
+    Taller,
+    Shorter,
+    /// Gives every window in the focused column the same height.
+    EqualHeights,
 }
 
 impl Command {
@@ -177,6 +203,14 @@ impl Command {
             28 => ScrollEnd,
             29 => FocusFirst,
             30 => FocusLast,
+            31 => WidenColumn,
+            32 => NarrowColumn,
+            33 => ToggleTabbed,
+            34 => TogglePinLeft,
+            35 => TogglePinRight,
+            36 => Taller,
+            37 => Shorter,
+            38 => EqualHeights,
             _ => return None,
         })
     }
@@ -222,6 +256,10 @@ pub struct ColumnState {
     pub width: f64,
     pub windows: Vec<WindowId>,
     pub focused_row: usize,
+    /// Only the focused window shows; the UI draws a tab bar for the rest.
+    pub tabbed: bool,
+    /// The edge the column is pinned to, if any; its `x` is where it is shown.
+    pub pinned: Option<Pin>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -347,21 +385,26 @@ impl Engine {
             .workspaces
             .iter()
             .enumerate()
-            .map(|(i, ws)| WorkspaceState {
-                name: self.config.workspace_names.get(i).cloned().unwrap_or_default(),
-                scroll: ws.scroll(),
-                focused_column: ws.focused_column(),
-                columns: ws
-                    .columns()
-                    .iter()
-                    .zip(ws.column_xs(self.config.gap))
-                    .map(|(c, x)| ColumnState {
-                        x,
-                        width: c.width(),
-                        windows: c.windows().to_vec(),
-                        focused_row: c.focused_row(),
-                    })
-                    .collect(),
+            .map(|(i, ws)| {
+                let monitor = self.monitors.iter().position(|m| m.workspace == i).unwrap_or(self.active);
+                WorkspaceState {
+                    name: self.config.workspace_names.get(i).cloned().unwrap_or_default(),
+                    scroll: ws.scroll(),
+                    focused_column: ws.focused_column(),
+                    columns: ws
+                        .columns()
+                        .iter()
+                        .zip(ws.column_xs(self.viewport(monitor), self.config.gap))
+                        .map(|(c, x)| ColumnState {
+                            x,
+                            width: c.width(),
+                            windows: c.windows().to_vec(),
+                            focused_row: c.focused_row(),
+                            tabbed: c.is_tabbed(),
+                            pinned: c.pinned(),
+                        })
+                        .collect(),
+                }
             })
             .collect();
         let windows: Vec<WindowState> = self
@@ -490,7 +533,8 @@ impl Engine {
                 self.applier.forget(id);
             }
         }
-        self.info = current;
+        let previous = std::mem::replace(&mut self.info, current);
+        self.follow_tabs(&previous);
 
         self.scratch.retain(|(id, _)| self.info.contains_key(id));
         self.mru.retain(|id| self.info.contains_key(id));
@@ -598,6 +642,36 @@ impl Engine {
         self.apply()
     }
 
+    /// Gives the place of each managed window that went away to the tab that
+    /// came forward in its native tab group, one it hid or one hiding it, so
+    /// opening, switching and closing tabs keep the group's column.
+    fn follow_tabs(&mut self, previous: &HashMap<WindowId, WindowInfo>) {
+        for (&old, info) in previous {
+            if self.info.contains_key(&old) {
+                continue;
+            }
+            let managed =
+                |id| self.scratch.iter().any(|&(w, _)| w == id) || self.workspaces.iter().any(|w| w.contains(id));
+            let Some(new) = self
+                .info
+                .values()
+                .find(|w| w.pid == info.pid && (w.tabs.contains(&old) || info.tabs.contains(&w.id)) && !managed(w.id))
+                .map(|w| w.id)
+            else {
+                continue;
+            };
+            for workspace in &mut self.workspaces {
+                workspace.replace_window(old, new);
+            }
+            for id in self.scratch.iter_mut().map(|(id, _)| id).chain(&mut self.mru) {
+                if *id == old {
+                    *id = new;
+                }
+            }
+            self.applier.forget(old);
+        }
+    }
+
     /// Puts every window back in its place, including ones that seemed to
     /// refuse it, and syncs.
     pub fn retile(&mut self) -> Result<()> {
@@ -614,6 +688,7 @@ impl Engine {
         }
         let gap = self.config.gap;
         let viewport = self.viewport(self.active);
+        let column_height = self.monitors[self.active].area.height - 2.0 * gap;
         let current = self.monitors[self.active].workspace;
         let before = self.focused_window();
         // Set by commands that decide focus themselves.
@@ -630,8 +705,24 @@ impl Engine {
             Command::MoveDown => ws.move_row(1),
             Command::CycleWidth => ws.cycle_width(&self.config.width_presets, viewport, gap),
             Command::ToggleFullWidth => ws.toggle_full_width(viewport),
-            Command::Consume => ws.consume(),
-            Command::Expel => ws.expel(),
+            Command::Consume => {
+                let changed = ws.consume();
+                // The pulled-in window may have come up above the active tab.
+                if changed && ws.columns()[ws.focused_column()].is_tabbed() {
+                    raise.extend(ws.focused_window());
+                }
+                changed
+            }
+            Command::Expel => {
+                let changed = ws.expel();
+                let source = &ws.columns()[ws.focused_column().saturating_sub(1)];
+                // The expelled window was the tab in front; bring up the one now active.
+                if changed && source.is_tabbed() {
+                    raise.push(source.focused_window());
+                    raise.extend(ws.focused_window());
+                }
+                changed
+            }
             Command::Center => {
                 ws.center_focused(viewport, gap);
                 true
@@ -663,6 +754,18 @@ impl Engine {
             }
             Command::FocusFirst => ws.focus_edge(false),
             Command::FocusLast => ws.focus_edge(true),
+            Command::WidenColumn => ws.nudge_width(self.config.width_step * viewport, viewport),
+            Command::NarrowColumn => ws.nudge_width(-self.config.width_step * viewport, viewport),
+            Command::ToggleTabbed => {
+                // Brings the active tab in front of the windows now behind it.
+                raise.extend(ws.focused_window());
+                ws.toggle_tabbed()
+            }
+            Command::TogglePinLeft => ws.toggle_pin(Pin::Left, viewport, gap),
+            Command::TogglePinRight => ws.toggle_pin(Pin::Right, viewport, gap),
+            Command::Taller => ws.resize_row(self.config.height_step, column_height, gap),
+            Command::Shorter => ws.resize_row(-self.config.height_step, column_height, gap),
+            Command::EqualHeights => ws.equalize_rows(),
         };
         if !matches!(command, Command::Center | Command::ScrollBy(_)) {
             self.ensure_visible_all();
@@ -895,7 +998,7 @@ impl Engine {
         }
         let gap = self.config.gap;
         let strip_x = point.x - self.monitors[monitor].area.x - gap + self.animator.shown(target);
-        let column = self.workspaces[target].column_at(strip_x, gap).unwrap_or(0);
+        let column = self.workspaces[target].column_at(strip_x, self.viewport(monitor), gap).unwrap_or(0);
         let moved = if source == target {
             self.workspaces[target].move_window_to(id, column)
         } else {
@@ -1109,6 +1212,72 @@ mod tests {
         assert_eq!(backend.frame_of(2).unwrap().x, 316.0);
     }
 
+    fn widths(engine: &Engine) -> Vec<f64> {
+        engine.workspace(0).unwrap().columns().iter().map(|c| c.width()).collect()
+    }
+
+    #[test]
+    fn tab_group_keeps_one_column_that_follows_the_shown_tab() {
+        let windows = vec![window(1, 0.0, 300.0), window(2, 400.0, 500.0), window(4, 950.0, 200.0)];
+        let (mut engine, backend) = engine_with(windows);
+        engine.sync().unwrap();
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        let column = backend.frame_of(2).unwrap();
+
+        backend.add_tab(2, 3);
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![4]]);
+        assert_eq!(widths(&engine), vec![300.0, 500.0, 200.0]);
+
+        backend.select_tab(2);
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2], vec![4]]);
+
+        // Closing the shown tab brings the next one forward in its place.
+        backend.remove(2);
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![4]]);
+        assert_eq!(backend.frame_of(3), Some(column));
+        assert_eq!(engine.state().focused_window, Some(3));
+    }
+
+    #[test]
+    fn closing_a_background_tab_changes_nothing() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        backend.add_tab(1, 2);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![2]]);
+        let calls = backend.set_frame_calls();
+
+        backend.remove(1);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![2]]);
+        assert_eq!(backend.set_frame_calls(), calls);
+    }
+
+    #[test]
+    fn detached_tab_opens_its_own_column() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        backend.add_tab(1, 2);
+        backend.add_tab(2, 3);
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![3]]);
+
+        backend.detach_tab(1, Rect::new(500.0, 100.0, 400.0, 300.0));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![3], vec![1]]);
+
+        // The shown tab keeps its column; the tab behind it opens beside it.
+        backend.detach_tab(3, Rect::new(600.0, 100.0, 400.0, 300.0));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![3], vec![2], vec![1]]);
+    }
+
     #[test]
     fn background_app_window_keeps_focus_and_scroll() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 600.0), window(2, 100.0, 600.0)]);
@@ -1182,6 +1351,30 @@ mod tests {
     }
 
     #[test]
+    fn widen_column_resizes_and_scrolls_it_into_view() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 400.0), window(2, 500.0, 500.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::FocusRight).unwrap();
+        assert_eq!(engine.command(Command::WidenColumn), Ok(true));
+        assert_eq!(engine.workspace(0).unwrap().scroll(), 8.0);
+        assert_eq!(backend.frame_of(2), Some(Rect::new(408.0, 33.0, 600.0, 584.0)));
+        assert_eq!(engine.command(Command::NarrowColumn), Ok(true));
+        assert_eq!(engine.workspace(0).unwrap().scroll(), 0.0);
+        assert_eq!(backend.frame_of(2).unwrap().width, 500.0);
+    }
+
+    #[test]
+    fn width_step_sets_how_far_widen_and_narrow_go() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.set_config(Config { width_step: 0.25, animation_duration: 0.0, ..Config::default() }).unwrap();
+        engine.sync().unwrap();
+        engine.command(Command::WidenColumn).unwrap();
+        assert_eq!(backend.frame_of(1).unwrap().width, 550.0);
+        engine.command(Command::NarrowColumn).unwrap();
+        assert_eq!(backend.frame_of(1).unwrap().width, 300.0);
+    }
+
+    #[test]
     fn move_and_stack_commands_rearrange_columns() {
         let (mut engine, _) =
             engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0), window(3, 200.0, 300.0)]);
@@ -1193,6 +1386,81 @@ mod tests {
         engine.command(Command::FocusDown).unwrap();
         engine.command(Command::Expel).unwrap();
         assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![2]]);
+    }
+
+    #[test]
+    fn tabbed_column_shows_one_window_at_full_height_and_focus_switches_tabs() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::FocusLeft).unwrap();
+        engine.command(Command::Consume).unwrap();
+        engine.command(Command::FocusDown).unwrap();
+        backend.set_focused(Some(1));
+        assert_eq!(engine.command(Command::ToggleTabbed), Ok(true));
+        let full = Rect::new(8.0, 33.0, 300.0, 584.0);
+        assert_eq!(backend.frame_of(1), Some(full));
+        assert_eq!(backend.frame_of(2), Some(full));
+        // Toggling raises the active tab above the others.
+        assert_eq!(backend.focused_window(), Some(2));
+        assert!(engine.state().workspaces[0].columns[0].tabbed);
+
+        assert_eq!(engine.command(Command::FocusUp), Ok(true));
+        assert_eq!(backend.focused_window(), Some(1));
+        assert_eq!(engine.command(Command::FocusUp), Ok(false));
+
+        engine.command(Command::ToggleTabbed).unwrap();
+        assert!(!engine.state().workspaces[0].columns[0].tabbed);
+        assert_eq!(backend.frame_of(1).unwrap().height, 288.0);
+    }
+
+    #[test]
+    fn tabbed_column_keeps_its_active_tab_in_front_through_consume_and_expel() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0), window(3, 200.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::FocusFirst).unwrap();
+        engine.command(Command::ToggleTabbed).unwrap();
+        let before = backend.raised().len();
+        engine.command(Command::Consume).unwrap();
+        // The pulled-in window must not stay above the active tab.
+        assert_eq!(backend.raised()[before..], [1]);
+        engine.command(Command::Consume).unwrap();
+        engine.command(Command::FocusDown).unwrap();
+        engine.command(Command::Expel).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1, 3], vec![2]]);
+        // The column's new active tab comes to the front, then the expelled window takes focus.
+        assert_eq!(backend.raised()[backend.raised().len() - 2..], [3, 2]);
+        assert_eq!(backend.focused_window(), Some(2));
+    }
+
+    #[test]
+    fn stacked_window_heights_can_be_changed_and_equalized() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        let height = |id| backend.frame_of(id).unwrap().height.round();
+        assert_eq!(engine.command(Command::Taller), Ok(false));
+        engine.command(Command::FocusLeft).unwrap();
+        engine.command(Command::Consume).unwrap();
+        assert_eq!((height(1), height(2)), (288.0, 288.0));
+        assert_eq!(engine.command(Command::Taller), Ok(true));
+        assert_eq!((height(1), height(2)), (346.0, 230.0));
+        engine.command(Command::Shorter).unwrap();
+        engine.command(Command::Shorter).unwrap();
+        assert_eq!((height(1), height(2)), (230.0, 346.0));
+        assert_eq!(engine.command(Command::EqualHeights), Ok(true));
+        assert_eq!((height(1), height(2)), (288.0, 288.0));
+    }
+
+    #[test]
+    fn height_step_sets_how_far_taller_and_shorter_go() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.set_config(Config { height_step: 0.25, animation_duration: 0.0, ..Config::default() }).unwrap();
+        engine.sync().unwrap();
+        engine.command(Command::FocusLeft).unwrap();
+        engine.command(Command::Consume).unwrap();
+        engine.command(Command::Taller).unwrap();
+        // 576 points of rows split 0.75 / 0.25.
+        assert_eq!((backend.frame_of(1).unwrap().height, backend.frame_of(2).unwrap().height), (432.0, 144.0));
     }
 
     #[test]
@@ -1441,6 +1709,16 @@ mod tests {
     }
 
     #[test]
+    fn tab_group_keeps_its_scratch_place() {
+        let (mut engine, backend) = engine_with_scratch();
+        backend.add_tab(2, 3);
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1]]);
+        assert_eq!(engine.state().scratch, vec![3]);
+    }
+
+    #[test]
     fn move_to_scratch_floats_window_centered() {
         let (engine, backend) = engine_with_scratch();
         assert_eq!(columns(&engine), vec![vec![1]]);
@@ -1583,7 +1861,8 @@ mod tests {
     fn command_parsing_rejects_unknown_values() {
         assert_eq!(Command::parse(0, 0.0), Some(Command::FocusLeft));
         assert_eq!(Command::parse(12, 0.0), Some(Command::Expel));
-        assert_eq!(Command::parse(31, 0.0), None);
+        assert_eq!(Command::parse(38, 0.0), Some(Command::EqualHeights));
+        assert_eq!(Command::parse(u32::MAX, 0.0), None);
     }
 
     #[test]
@@ -1602,6 +1881,8 @@ mod tests {
         let config = Config::from_json(r#"{"gap":4}"#).unwrap();
         assert_eq!(config.gap, 4.0);
         assert_eq!(config.width_presets, Config::default().width_presets);
+        assert_eq!(config.width_step, 0.1);
+        assert_eq!(config.height_step, 0.1);
         assert_eq!(config.workspace_names, (1..=9).map(|i| i.to_string()).collect::<Vec<_>>());
 
         let config = Config::from_json(r#"{"width_presets":[],"workspace_names":["Web"]}"#).unwrap();
@@ -1613,6 +1894,8 @@ mod tests {
         assert_eq!(Config::from_json("nope"), None);
         assert_eq!(Config::from_json(r#"{"gap":-3}"#), None);
         assert_eq!(Config::from_json(r#"{"animation_duration":-1}"#), None);
+        assert_eq!(Config::from_json(r#"{"width_step":0}"#).unwrap().width_step, 0.1);
+        assert_eq!(Config::from_json(r#"{"height_step":-1}"#).unwrap().height_step, 0.1);
         assert_eq!(
             Config::from_json(r#"{"center_focused":"on_overflow"}"#).unwrap().center_focused,
             CenterFocus::OnOverflow
@@ -1974,6 +2257,27 @@ mod tests {
 
         engine.command(Command::FocusRight).unwrap();
         assert_eq!(engine.state().focused_window, Some(2));
+    }
+
+    #[test]
+    fn pin_commands_keep_a_column_at_the_screen_edge() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0), window(3, 800.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::FocusFirst).unwrap();
+        assert_eq!(engine.command(Command::TogglePinRight), Ok(true));
+        assert_eq!(columns(&engine), vec![vec![2], vec![3], vec![1]]);
+        assert_eq!(backend.frame_of(1).unwrap().x, SCREEN.max_x() - 8.0 - 300.0);
+        let state = engine.state();
+        let pinned = &state.workspaces[0].columns[2];
+        assert_eq!((pinned.pinned, pinned.x), (Some(Pin::Right), 700.0));
+        assert!(serde_json::to_string(&state).unwrap().contains(r#""pinned":"right""#));
+
+        assert_eq!(engine.command(Command::FocusLeft), Ok(true));
+        assert_eq!(backend.focused_window(), Some(3));
+        engine.command(Command::FocusRight).unwrap();
+        assert_eq!(engine.command(Command::TogglePinRight), Ok(true));
+        assert_eq!(engine.state().workspaces[0].columns[2].pinned, None);
     }
 
     #[test]
