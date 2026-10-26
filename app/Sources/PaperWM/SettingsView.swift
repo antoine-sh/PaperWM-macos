@@ -364,6 +364,9 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
         NSApp.activate()
         window?.center()
         window?.makeKeyAndOrderFront(nil)
+        // macOS 14 may decline the activation above, leaving the window
+        // behind the front app's windows.
+        window?.orderFrontRegardless()
     }
 
     // Closing mid-recording must give the global shortcuts back.
