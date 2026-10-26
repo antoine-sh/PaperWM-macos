@@ -19,6 +19,8 @@ pub struct MockBackend {
     /// Background tabs. Like macOS, a tab group is the windows of one app
     /// sharing a frame, of which only the shown one is on screen.
     hidden_tabs: RefCell<Vec<WindowId>>,
+    /// Every window `focus` raised, oldest first; the last is frontmost.
+    raised: RefCell<Vec<WindowId>>,
 }
 
 impl MockBackend {
@@ -119,6 +121,10 @@ impl MockBackend {
         self.set_frame_calls.get()
     }
 
+    pub fn raised(&self) -> Vec<WindowId> {
+        self.raised.borrow().clone()
+    }
+
     /// How often `focused_window` was asked, each two round trips on macOS.
     pub fn focus_queries(&self) -> usize {
         self.focus_queries.get()
@@ -190,6 +196,7 @@ impl WindowBackend for MockBackend {
         if !self.windows.borrow().iter().any(|w| w.id == id) {
             return Err(BackendError::WindowNotFound(id));
         }
+        self.raised.borrow_mut().push(id);
         if !self.focus_is_async.get() {
             self.focused.set(Some(id));
         }
