@@ -15,6 +15,9 @@ final class WindowManager {
     private let minimap = Minimap()
     private let switcher = Switcher()
     private let decorations = Decorations()
+    private lazy var tabBars = TabBars { [weak self] id in
+        self?.perform(.engine(PWM_COMMAND_FOCUS_WINDOW, Double(id)))
+    }
     private lazy var gestures = Gestures { [weak self] action in self?.perform(action) }
     private lazy var modifiers = ModifierWatcher { [weak self] in self?.superReleased() }
     private lazy var drags = DragWatcher { [weak self] point in self?.dropped(at: point) }
@@ -131,6 +134,7 @@ final class WindowManager {
             return nil
         }
         decorations.refresh(focus: state.focusedWindow)
+        tabBars.update(state)
         onStateChange?(state)
         return state
     }

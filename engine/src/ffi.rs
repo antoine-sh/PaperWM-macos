@@ -470,6 +470,7 @@ mod tests {
             ("FOCUS_LAST", Command::FocusLast),
             ("WIDEN_COLUMN", Command::WidenColumn),
             ("NARROW_COLUMN", Command::NarrowColumn),
+            ("TOGGLE_TABBED", Command::ToggleTabbed),
         ];
         for (name, command) in commands {
             assert_eq!(Command::parse(value(&format!("PWM_COMMAND_{name}")), 1.0), Some(command), "{name}");

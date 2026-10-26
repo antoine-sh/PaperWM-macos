@@ -97,6 +97,7 @@ struct HotKey {
             key("center", "Center Column", kVK_ANSI_C, base, .engine(PWM_COMMAND_CENTER)),
             key("consume", "Pull Next Window into Column", kVK_ANSI_I, base, .engine(PWM_COMMAND_CONSUME)),
             key("expel", "Push Window out of Column", kVK_ANSI_O, base, .engine(PWM_COMMAND_EXPEL)),
+            key("toggle-tabbed", "Toggle Tabbed Column", kVK_ANSI_T, shift, .engine(PWM_COMMAND_TOGGLE_TABBED)),
             key("switcher", "Switch Windows", kVK_Tab, base, .switcher(forward: true)),
             key("switcher-back", "Switch Windows Backwards", kVK_Tab, shift, .switcher(forward: false)),
             key("next-workspace", "Next Workspace", kVK_PageDown, base, .engine(PWM_COMMAND_NEXT_WORKSPACE)),

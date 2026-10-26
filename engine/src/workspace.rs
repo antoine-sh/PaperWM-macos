@@ -14,11 +14,14 @@ pub struct Column {
     focused_row: usize,
     /// Width to go back to when leaving full width.
     width_before_full: Option<f64>,
+    /// Shows only the focused window, at the column's full height, with the
+    /// others behind it.
+    tabbed: bool,
 }
 
 impl Column {
     fn new(window: WindowId, width: f64) -> Self {
-        Self { windows: vec![window], width, focused_row: 0, width_before_full: None }
+        Self { windows: vec![window], width, focused_row: 0, width_before_full: None, tabbed: false }
     }
 
     pub fn windows(&self) -> &[WindowId] {
@@ -35,6 +38,10 @@ impl Column {
 
     pub fn focused_row(&self) -> usize {
         self.focused_row
+    }
+
+    pub fn is_tabbed(&self) -> bool {
+        self.tabbed
     }
 }
 
@@ -283,6 +290,12 @@ impl Workspace {
                 column.width = viewport;
             }
         }
+        true
+    }
+
+    pub fn toggle_tabbed(&mut self) -> bool {
+        let Some(column) = self.columns.get_mut(self.focused) else { return false };
+        column.tabbed = !column.tabbed;
         true
     }
 
@@ -558,6 +571,23 @@ mod tests {
         assert_eq!(ws.focused_window(), Some(2));
         assert_eq!(ws.columns()[1].width(), 300.0);
         assert!(!ws.expel());
+    }
+
+    #[test]
+    fn toggle_tabbed_flips_the_focused_column_and_survives_stacking() {
+        let mut ws = workspace(&[300.0, 300.0, 300.0]);
+        ws.focus_window(1);
+        assert!(ws.toggle_tabbed());
+        assert!(ws.columns()[0].is_tabbed());
+        assert!(!ws.columns()[1].is_tabbed());
+        ws.consume();
+        ws.expel();
+        assert!(ws.columns()[0].is_tabbed());
+        assert!(!ws.columns()[1].is_tabbed());
+        ws.focus_window(2);
+        assert!(ws.toggle_tabbed());
+        assert!(!ws.columns()[0].is_tabbed());
+        assert!(!Workspace::default().toggle_tabbed());
     }
 
     #[test]
