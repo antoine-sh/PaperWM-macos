@@ -132,7 +132,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let manager else { return }
         do {
             let lines = try manager.engine.windows().map { w in
-                let flags = [w.isStandard ? nil : "floating", w.isMinimized ? "minimized" : nil].compactMap { $0 }
+                let flags = [w.isStandard && w.isResizable ? nil : "floating", w.isMinimized ? "minimized" : nil]
+                    .compactMap { $0 }
                 let suffix = flags.isEmpty ? "" : " (\(flags.joined(separator: ", ")))"
                 return "\(w.appName): \(w.title.isEmpty ? "untitled" : w.title)\(suffix)"
             }

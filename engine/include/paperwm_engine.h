@@ -82,6 +82,7 @@ typedef struct {
     char *app_name;
     char *title;
     bool is_standard;
+    bool is_resizable;
     bool is_minimized;
 } PwmWindow;
 

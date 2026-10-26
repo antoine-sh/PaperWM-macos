@@ -10,6 +10,7 @@ struct ManagedWindow {
     let title: String
     let frame: CGRect
     let isStandard: Bool
+    let isResizable: Bool
     let isMinimized: Bool
 }
 
@@ -78,6 +79,7 @@ final class Engine {
                 title: String(cString: w.title),
                 frame: CGRect(w.frame),
                 isStandard: w.is_standard,
+                isResizable: w.is_resizable,
                 isMinimized: w.is_minimized
             )
         }

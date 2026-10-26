@@ -491,8 +491,15 @@ impl Engine {
         if self.monitors.is_empty() {
             return Ok(());
         }
-        let mut current: HashMap<WindowId, WindowInfo> =
-            self.backend.windows()?.into_iter().filter(WindowInfo::is_tileable).map(|w| (w.id, w)).collect();
+        // Held windows that stopped being tileable without being minimized
+        // are kept here to be released below.
+        let mut current: HashMap<WindowId, WindowInfo> = self
+            .backend
+            .windows()?
+            .into_iter()
+            .filter(|w| w.is_tileable() || (!w.is_minimized && self.info.contains_key(&w.id)))
+            .map(|w| (w.id, w))
+            .collect();
         // Windows whose frame was just read, as opposed to kept from before.
         let fresh: HashSet<WindowId> = current.keys().copied().collect();
         let skipped = self.backend.skipped_apps();
@@ -503,12 +510,16 @@ impl Engine {
                 }
             }
         }
-        // Windows of floating apps leave the layout; ones it held go back on
-        // screen, since they may be parked or hidden: centred on the monitor
-        // showing them, or else the active one.
+        // Windows of floating apps, and fixed-size ones, leave the layout;
+        // ones it held go back on screen, since they may be parked or hidden:
+        // centred on the monitor showing them, or else the active one, at
+        // their own size. Fixed-size ones are only moved, since they refuse
+        // the size a whole frame sets first.
         let floating: Vec<WindowId> = current
             .values()
-            .filter(|w| self.config.rule_for(&w.app_name).is_some_and(|r| r.action == AppAction::Float))
+            .filter(|w| {
+                !w.is_tileable() || self.config.rule_for(&w.app_name).is_some_and(|r| r.action == AppAction::Float)
+            })
             .map(|w| w.id)
             .collect();
         let mut released = Vec::new();
@@ -518,7 +529,7 @@ impl Engine {
                 let workspace = self.workspaces.iter().position(|w| w.contains(id));
                 let monitor = self.monitors.iter().find(|m| Some(m.workspace) == workspace);
                 let area = monitor.unwrap_or(&self.monitors[self.active]).area;
-                released.push((id, centred(self.applier.get(id).unwrap_or(info.frame), area)));
+                released.push((id, centred(info.frame, area), info.is_resizable));
                 self.applier.forget(id);
             }
         }
@@ -600,8 +611,13 @@ impl Engine {
             let focused = self.backend.focused_window();
             self.drop_window(point, focused, &fresh);
         }
-        for (id, frame) in released {
-            match self.backend.set_frame(id, frame) {
+        for (id, frame, resizable) in released {
+            let result = if resizable {
+                self.backend.set_frame(id, frame)
+            } else {
+                self.backend.set_position(id, frame.x, frame.y)
+            };
+            match result {
                 Ok(()) | Err(BackendError::WindowNotFound(_)) => {}
                 Err(err) => return Err(err),
             }
@@ -1157,6 +1173,34 @@ mod tests {
         backend.update(1, |w| w.is_minimized = true);
         engine.sync().unwrap();
         assert!(columns(&engine).is_empty());
+    }
+
+    #[test]
+    fn fixed_size_windows_float() {
+        let mut calculator = window(2, 0.0, 230.0);
+        calculator.is_resizable = false;
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), calculator]);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1]]);
+        assert_eq!(backend.frame_of(2), Some(Rect::new(0.0, 100.0, 230.0, 300.0)));
+    }
+
+    #[test]
+    fn tiled_window_found_fixed_size_later_comes_back_on_screen() {
+        // A busy app may only answer whether its window is resizable after it was tiled.
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::SwitchWorkspace(1)).unwrap();
+        assert!(is_hidden(backend.frame_of(1).unwrap()));
+
+        // It never took the column's height.
+        backend.update(1, |w| {
+            w.is_resizable = false;
+            w.frame.height = 300.0;
+        });
+        engine.sync().unwrap();
+        assert!(engine.workspace(0).unwrap().windows().next().is_none());
+        assert_eq!(backend.frame_of(1).unwrap().x, SCREEN.x + (SCREEN.width - 300.0) / 2.0);
     }
 
     #[test]

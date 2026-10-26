@@ -41,6 +41,7 @@ impl MockBackend {
             title: format!("Window {id}"),
             frame,
             is_standard: true,
+            is_resizable: true,
             is_minimized: false,
             is_fullscreen: false,
             tabs: Vec::new(),
@@ -161,6 +162,10 @@ impl WindowBackend for MockBackend {
         let window = windows.iter().find(|w| w.id == id).ok_or(BackendError::WindowNotFound(id))?;
         if self.unresponsive.borrow().contains(&window.pid) {
             return Err(BackendError::Platform("app is not responding".into()));
+        }
+        // Like a window whose AX size is not settable, which the frame write sets first.
+        if !window.is_resizable && (frame.width, frame.height) != (window.frame.width, window.frame.height) {
+            return Err(BackendError::Platform("size is not settable".into()));
         }
         // Background tabs move with the shown one.
         let (pid, old) = (window.pid, window.frame);

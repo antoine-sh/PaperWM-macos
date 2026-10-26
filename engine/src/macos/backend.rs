@@ -37,8 +37,10 @@ const WINDOW_ATTRIBUTES: [&str; 6] = [
 struct CachedWindow {
     element: AxElement,
     pid: i32,
-    /// The subrole never changes, so it is read once per window.
+    /// The subrole and resizability never change, so they are read once per window.
     is_standard: bool,
+    /// `None` until the app answers, so a busy app is asked again later.
+    is_resizable: Option<bool>,
     app_name: String,
     /// Its app is read even with nothing on screen, so a window on its own
     /// fullscreen Space is still reported.
@@ -223,7 +225,8 @@ impl WindowBackend for AxBackend {
                 };
                 let [position, size, title, subrole, minimized, fullscreen] = &values[..] else { continue };
                 let is_fullscreen = fullscreen.as_ref().and_then(as_bool).unwrap_or(false);
-                let is_standard = match previous.get(&id) {
+                let cached = previous.get(&id);
+                let is_standard = match cached {
                     Some(cached) => cached.is_standard,
                     None => subrole.as_ref().and_then(as_string).as_deref() == Some(kAXStandardWindowSubrole),
                 };
@@ -237,6 +240,8 @@ impl WindowBackend for AxBackend {
                     title: title.as_ref().and_then(as_string).unwrap_or_default(),
                     frame,
                     is_standard,
+                    // Only a definite "no" floats a window; a busy app keeps it tiled.
+                    is_resizable: cached.and_then(|cached| cached.is_resizable).unwrap_or(true),
                     is_minimized: false,
                     is_fullscreen,
                     tabs: Vec::new(),
@@ -260,13 +265,27 @@ impl WindowBackend for AxBackend {
                         continue;
                     }
                 };
+                // macOS owns a fullscreen window's size, so it is asked once it leaves.
+                let is_resizable = match cached.and_then(|cached| cached.is_resizable) {
+                    Some(resizable) => Some(resizable),
+                    None if is_fullscreen => None,
+                    None => self.timed(pid, || element.is_settable(kAXSizeAttribute)).ok(),
+                };
+                info.is_resizable = is_resizable.unwrap_or(true);
                 if let Some(observer) = observers.get_mut(&pid) {
                     observer.watch_window(id, &element);
                 }
                 windows.push((z_order, info));
                 elements.insert(
                     id,
-                    CachedWindow { element, pid, is_standard, app_name: app_name.to_owned(), is_fullscreen },
+                    CachedWindow {
+                        element,
+                        pid,
+                        is_standard,
+                        is_resizable,
+                        app_name: app_name.to_owned(),
+                        is_fullscreen,
+                    },
                 );
             }
             // shortcut: a window on another Space at exactly a shown window's
@@ -294,6 +313,7 @@ impl WindowBackend for AxBackend {
                     element,
                     pid: info.pid,
                     is_standard: info.is_standard,
+                    is_resizable: previous.get(&info.id).and_then(|cached| cached.is_resizable),
                     app_name: info.app_name.clone(),
                     is_fullscreen: false,
                 };

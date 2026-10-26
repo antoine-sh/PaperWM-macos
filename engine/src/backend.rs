@@ -19,6 +19,9 @@ pub struct WindowInfo {
     pub frame: Rect,
     /// A regular document window, as opposed to a dialog, sheet, panel or popup.
     pub is_standard: bool,
+    /// False for fixed-size windows such as Calculator, which float like
+    /// dialogs because a column would only stretch or squeeze them.
+    pub is_resizable: bool,
     pub is_minimized: bool,
     /// In macOS native fullscreen, on a Space of its own. macOS owns its
     /// frame until it leaves, so it keeps its column but is not moved.
@@ -32,7 +35,7 @@ pub struct WindowInfo {
 impl WindowInfo {
     /// Whether the window should take part in tiling.
     pub fn is_tileable(&self) -> bool {
-        self.is_standard && !self.is_minimized
+        self.is_standard && self.is_resizable && !self.is_minimized
     }
 }
 
