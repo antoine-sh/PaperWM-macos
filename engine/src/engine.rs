@@ -1494,6 +1494,16 @@ mod tests {
     }
 
     #[test]
+    fn tab_group_keeps_its_scratch_place() {
+        let (mut engine, backend) = engine_with_scratch();
+        backend.add_tab(2, 3);
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1]]);
+        assert_eq!(engine.state().scratch, vec![3]);
+    }
+
+    #[test]
     fn move_to_scratch_floats_window_centered() {
         let (engine, backend) = engine_with_scratch();
         assert_eq!(columns(&engine), vec![vec![1]]);

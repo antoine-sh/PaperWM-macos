@@ -137,7 +137,8 @@ impl WindowBackend for MockBackend {
         let hidden = self.hidden_tabs.borrow();
         let windows = self.windows.borrow();
         let shown = windows.iter().filter(|w| !busy.contains(&w.pid) && !hidden.contains(&w.id));
-        Ok(shown.map(|w| WindowInfo { tabs: self.tab_group(w.id), ..w.clone() }).collect())
+        let tabs = |id| self.tab_group(id).into_iter().filter(|t| hidden.contains(t)).collect();
+        Ok(shown.map(|w| WindowInfo { tabs: tabs(w.id), ..w.clone() }).collect())
     }
 
     fn skipped_apps(&self) -> Vec<i32> {
