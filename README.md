@@ -139,6 +139,7 @@ scripts/make-dmg.sh                # optional: package as build/PaperWM-<version
 ```
 
 CI builds a universal disk image on every push and pull request; download it from the run's **PaperWM-dmg** artifact.
+Pushing a `v*` tag also publishes the disk image as a GitHub release.
 
 On first launch macOS asks you to grant Accessibility access in System Settings › Privacy & Security › Accessibility. Builds are signed ad hoc, so after rebuilding you may need to remove PaperWM from that list and add it again.
 
