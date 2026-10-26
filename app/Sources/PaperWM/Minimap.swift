@@ -78,7 +78,8 @@ struct StripView: View {
     var body: some View {
         let workspace = state.workspaces[monitor.workspace]
         let viewport = monitor.viewport
-        let stripWidth = workspace.columns.last.map { $0.x + $0.width } ?? 0
+        // Not the last column's end: a right pin is drawn where it is shown, not past the strip.
+        let stripWidth = workspace.columns.map { $0.x + $0.width }.max() ?? 0
         let scale = width / max(stripWidth, viewport)
 
         VStack(alignment: .leading, spacing: 8) {
@@ -178,8 +179,21 @@ struct ToolbarView: View {
         }
     }
 
+    /// Whether the column is on screen: in the viewport and, unless pinned, not parked under a pin.
     private func isVisible(_ index: Int, in workspace: EngineState.Workspace) -> Bool {
         let column = workspace.columns[index]
-        return column.x + column.width > workspace.scroll && column.x < workspace.scroll + monitor.viewport
+        if column.pinned != nil || index == workspace.focusedColumn {
+            return true
+        }
+        guard column.x + column.width > workspace.scroll, column.x < workspace.scroll + monitor.viewport else {
+            return false
+        }
+        return workspace.columns.allSatisfy { pin in
+            switch pin.pinned {
+            case "left"?: return column.x >= pin.x + pin.width
+            case "right"?: return column.x + column.width <= pin.x
+            default: return true
+            }
+        }
     }
 }

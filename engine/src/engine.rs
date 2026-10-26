@@ -659,8 +659,8 @@ impl Engine {
             }
             Command::FocusFirst => ws.focus_edge(false),
             Command::FocusLast => ws.focus_edge(true),
-            Command::TogglePinLeft => ws.toggle_pin(Pin::Left),
-            Command::TogglePinRight => ws.toggle_pin(Pin::Right),
+            Command::TogglePinLeft => ws.toggle_pin(Pin::Left, viewport, gap),
+            Command::TogglePinRight => ws.toggle_pin(Pin::Right, viewport, gap),
         };
         if !matches!(command, Command::Center | Command::ScrollBy(_)) {
             self.ensure_visible_all();

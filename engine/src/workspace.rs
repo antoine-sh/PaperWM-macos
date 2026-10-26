@@ -241,7 +241,8 @@ impl Workspace {
     /// focused column (PaperWM's "slurp").
     pub fn consume(&mut self) -> bool {
         let next = self.focused + 1;
-        if next >= self.columns.len() {
+        // A pin only goes away when the user unpins it or closes its windows.
+        if next >= self.columns.len() || self.columns[next].pinned.is_some() {
             return false;
         }
         let window = self.columns[next].windows.remove(0);
@@ -272,13 +273,19 @@ impl Workspace {
     }
 
     /// Pins the focused column to `pin`'s edge in place of any column pinned
-    /// there, or unpins it if it is already there.
-    pub fn toggle_pin(&mut self, pin: Pin) -> bool {
-        let Some(column) = self.columns.get_mut(self.focused) else { return false };
+    /// there, or unpins it if it is already there. Refused when the pins
+    /// would leave the strip less than a minimum-width column.
+    pub fn toggle_pin(&mut self, pin: Pin, viewport: f64, gap: f64) -> bool {
+        let Some(column) = self.columns.get(self.focused) else { return false };
         if column.pinned == Some(pin) {
             // Already at its end of the strip, where it stays.
-            column.pinned = None;
+            self.columns[self.focused].pinned = None;
             return true;
+        }
+        let other = if pin == Pin::Left { Pin::Right } else { Pin::Left };
+        let other_margin = if column.pinned == Some(other) { 0.0 } else { self.pin_margin(other, gap) };
+        if column.width + gap + other_margin > viewport - MIN_COLUMN_WIDTH {
+            return false;
         }
         for column in &mut self.columns {
             if column.pinned == Some(pin) {
@@ -812,25 +819,25 @@ mod tests {
     fn pinning_moves_the_column_to_its_edge_and_pinning_again_unpins() {
         let mut ws = workspace(&[300.0, 300.0, 300.0]);
         ws.focus_column(-1);
-        assert!(ws.toggle_pin(Pin::Left));
+        assert!(ws.toggle_pin(Pin::Left, VIEW, GAP));
         assert_eq!(layout(&ws), vec![vec![2], vec![1], vec![3]]);
         assert_eq!(pins(&ws), vec![Some(Pin::Left), None, None]);
         assert_eq!(ws.focused_window(), Some(2));
-        assert!(ws.toggle_pin(Pin::Left));
+        assert!(ws.toggle_pin(Pin::Left, VIEW, GAP));
         assert_eq!(pins(&ws), vec![None, None, None]);
-        assert!(!Workspace::default().toggle_pin(Pin::Right));
+        assert!(!Workspace::default().toggle_pin(Pin::Right, VIEW, GAP));
     }
 
     #[test]
     fn pinning_another_column_replaces_the_pin_on_that_side() {
         let mut ws = workspace(&[300.0, 300.0, 300.0]);
         ws.focus_window(2);
-        ws.toggle_pin(Pin::Left);
+        ws.toggle_pin(Pin::Left, VIEW, GAP);
         ws.focus_window(3);
-        ws.toggle_pin(Pin::Left);
+        ws.toggle_pin(Pin::Left, VIEW, GAP);
         assert_eq!(layout(&ws), vec![vec![3], vec![2], vec![1]]);
         assert_eq!(pins(&ws), vec![Some(Pin::Left), None, None]);
-        ws.toggle_pin(Pin::Right);
+        ws.toggle_pin(Pin::Right, VIEW, GAP);
         assert_eq!(layout(&ws), vec![vec![2], vec![1], vec![3]]);
         assert_eq!(pins(&ws), vec![None, None, Some(Pin::Right)]);
     }
@@ -838,7 +845,7 @@ mod tests {
     #[test]
     fn columns_stay_between_the_pins() {
         let mut ws = workspace(&[300.0, 300.0]);
-        ws.toggle_pin(Pin::Right);
+        ws.toggle_pin(Pin::Right, VIEW, GAP);
         ws.insert_window(3, 300.0, VIEW);
         assert_eq!(layout(&ws), vec![vec![1], vec![3], vec![2]]);
         assert_eq!(ws.focused_window(), Some(3));
@@ -852,10 +859,32 @@ mod tests {
     }
 
     #[test]
+    fn pins_leave_room_for_the_strip() {
+        let mut ws = workspace(&[300.0, 600.0, 300.0]);
+        ws.focus_column(-1);
+        ws.toggle_full_width(VIEW);
+        assert!(!ws.toggle_pin(Pin::Left, VIEW, GAP));
+        let mut ws = workspace(&[500.0, 300.0, 500.0]);
+        assert!(ws.toggle_pin(Pin::Right, VIEW, GAP));
+        ws.focus_edge(false);
+        assert!(!ws.toggle_pin(Pin::Left, VIEW, GAP));
+        assert_eq!(pins(&ws), vec![None, None, Some(Pin::Right)]);
+    }
+
+    #[test]
+    fn consume_leaves_a_pin_alone() {
+        let mut ws = workspace(&[300.0, 300.0]);
+        ws.toggle_pin(Pin::Right, VIEW, GAP);
+        ws.focus_column(-1);
+        assert!(!ws.consume());
+        assert_eq!(layout(&ws), vec![vec![1], vec![2]]);
+    }
+
+    #[test]
     fn the_strip_scrolls_in_the_width_beside_the_pins() {
         let mut ws = workspace(&[300.0, 600.0, 600.0, 600.0]);
         ws.focus_edge(false);
-        ws.toggle_pin(Pin::Left);
+        ws.toggle_pin(Pin::Left, VIEW, GAP);
         ws.focus_edge(true);
         ws.ensure_focused_visible(VIEW, GAP);
         // Column 4 spans 1530..2130 and ends at the right of the viewport.
@@ -880,9 +909,9 @@ mod tests {
     #[test]
     fn pins_report_where_they_are_shown_and_cover_the_strip_behind_them() {
         let mut ws = workspace(&[300.0, 600.0, 600.0, 300.0]);
-        ws.toggle_pin(Pin::Right);
+        ws.toggle_pin(Pin::Right, VIEW, GAP);
         ws.focus_edge(false);
-        ws.toggle_pin(Pin::Left);
+        ws.toggle_pin(Pin::Left, VIEW, GAP);
         ws.scroll_by(200.0, VIEW, GAP);
         assert_eq!(ws.column_xs(VIEW, GAP), vec![200.0, 310.0, 920.0, 200.0 + VIEW - 300.0]);
         assert_eq!(ws.column_at(250.0, VIEW, GAP), Some(0));
