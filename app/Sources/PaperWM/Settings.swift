@@ -46,6 +46,8 @@ final class Settings: ObservableObject {
         var widthPresets: [Double] = [1.0 / 3.0, 0.5, 2.0 / 3.0]
         /// Fraction of the screen width Widen and Narrow Column add or take away.
         var widthStep = 0.1
+        /// Fraction of a stacked column's height Make Window Taller and Shorter move.
+        var heightStep = 0.1
         var workspaceNames: [String] = (1...Int(PWM_WORKSPACE_COUNT)).map { String($0) }
         /// Seconds the strip takes to scroll; 0 jumps.
         var animationDuration: Double = 0.25
@@ -76,6 +78,7 @@ final class Settings: ObservableObject {
             gap = try c.decodeIfPresent(Double.self, forKey: .gap) ?? defaults.gap
             widthPresets = try c.decodeIfPresent([Double].self, forKey: .widthPresets) ?? defaults.widthPresets
             widthStep = try c.decodeIfPresent(Double.self, forKey: .widthStep) ?? defaults.widthStep
+            heightStep = try c.decodeIfPresent(Double.self, forKey: .heightStep) ?? defaults.heightStep
             workspaceNames = try c.decodeIfPresent([String].self, forKey: .workspaceNames) ?? defaults.workspaceNames
             animationDuration = try c.decodeIfPresent(Double.self, forKey: .animationDuration)
                 ?? defaults.animationDuration
@@ -132,6 +135,7 @@ final class Settings: ObservableObject {
             let gap: Double
             let widthPresets: [Double]
             let widthStep: Double
+            let heightStep: Double
             let workspaceNames: [String]
             let animationDuration: Double
             let centerFocused: CenterFocus
@@ -143,8 +147,9 @@ final class Settings: ObservableObject {
             Rule(app: $0.app, action: $0.action, workspace: $0.workspace, column: $0.column)
         }
         let config = Config(gap: values.gap, widthPresets: values.widthPresets, widthStep: values.widthStep,
-                            workspaceNames: values.workspaceNames, animationDuration: values.animationDuration,
-                            centerFocused: values.centerFocused, appRules: rules)
+                            heightStep: values.heightStep, workspaceNames: values.workspaceNames,
+                            animationDuration: values.animationDuration, centerFocused: values.centerFocused,
+                            appRules: rules)
         return (try? encoder.encode(config)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
     }
 

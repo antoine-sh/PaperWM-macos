@@ -40,7 +40,7 @@ Covers PaperWM's everyday features. Built and unit-tested in CI, but not yet tes
 | ⌃⌥ C | Center the column |
 | ⌃⌥ I | Pull the next column's window into this column |
 | ⌃⌥ O | Push the focused window out into its own column |
-| ⌃⌥⇧ = / - | Make the window taller / shorter in its stacked column |
+| ⌃⌥⇧ = / - | Make the window taller / shorter in its stacked column (by 10% of the column; set the step in Settings) |
 | ⌃⌥ 0 | Give every window in the column the same height |
 | ⌃⌥ Tab / ⌃⌥⇧ Tab | Switch windows (release ⌃⌥ to pick, ⌃⌥ Esc to cancel) |
 | ⌃⌥ 1…9 | Switch to workspace 1…9 |
