@@ -11,6 +11,12 @@
 
 ---
 
+![PaperWM for macOS: focusing, moving, resizing and stacking columns, then switching workspace](docs/demo.gif)
+
+<sub>A scripted model of the layout, rendered by `scripts/demo-gif.py`; not a screen recording.</sub>
+
+---
+
 Every new window opens as a column to the right of the one you're on. Move along the strip with the keyboard or
 the trackpad, and the strip slides to bring the window you want into view. Nothing overlaps, nothing shrinks to
 fit, and you never drag a window into place again.
