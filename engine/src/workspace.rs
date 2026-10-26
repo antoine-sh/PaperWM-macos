@@ -188,6 +188,13 @@ impl Workspace {
         true
     }
 
+    /// Puts `new` in the place of `old`.
+    pub fn replace_window(&mut self, old: WindowId, new: WindowId) {
+        if let Some((c, r)) = self.position(old) {
+            self.columns[c].windows[r] = new;
+        }
+    }
+
     pub fn focus_window(&mut self, id: WindowId) -> bool {
         let Some((c, r)) = self.position(id) else { return false };
         self.focused = c;
@@ -318,6 +325,19 @@ impl Workspace {
         let widths: Vec<f64> = fractions.iter().map(|f| clamp_width(f * (viewport + gap) - gap, viewport)).collect();
         let Some(&first) = widths.first() else { return false };
         column.width = widths.iter().copied().find(|&w| w > column.width + 1.0).unwrap_or(first);
+        column.width_before_full = None;
+        true
+    }
+
+    /// Grows (or, with a negative `delta`, shrinks) the focused column by
+    /// `delta` points, between the minimum width and the viewport.
+    pub fn nudge_width(&mut self, delta: f64, viewport: f64) -> bool {
+        let Some(column) = self.columns.get_mut(self.focused) else { return false };
+        let width = clamp_width(column.width + delta, viewport);
+        if width == column.width {
+            return false;
+        }
+        column.width = width;
         column.width_before_full = None;
         true
     }
@@ -684,6 +704,24 @@ mod tests {
         assert_eq!(ws.columns()[0].width(), VIEW);
         ws.toggle_full_width(VIEW);
         assert_eq!(ws.columns()[0].width(), 300.0);
+    }
+
+    #[test]
+    fn nudge_width_steps_and_clamps() {
+        let mut ws = workspace(&[300.0]);
+        assert!(ws.nudge_width(100.0, VIEW));
+        assert_eq!(ws.columns()[0].width(), 400.0);
+        assert!(ws.nudge_width(1000.0, VIEW));
+        assert_eq!(ws.columns()[0].width(), VIEW);
+        assert!(!ws.nudge_width(100.0, VIEW));
+        assert!(ws.nudge_width(-2000.0, VIEW));
+        assert_eq!(ws.columns()[0].width(), MIN_COLUMN_WIDTH);
+        assert!(!ws.nudge_width(-100.0, VIEW));
+        // A nudge after full width keeps the new width; toggling goes full again.
+        ws.toggle_full_width(VIEW);
+        ws.nudge_width(-100.0, VIEW);
+        ws.toggle_full_width(VIEW);
+        assert_eq!(ws.columns()[0].width(), VIEW);
     }
 
     #[test]

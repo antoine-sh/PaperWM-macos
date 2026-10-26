@@ -468,6 +468,8 @@ mod tests {
             ("SCROLL_END", Command::ScrollEnd),
             ("FOCUS_FIRST", Command::FocusFirst),
             ("FOCUS_LAST", Command::FocusLast),
+            ("WIDEN_COLUMN", Command::WidenColumn),
+            ("NARROW_COLUMN", Command::NarrowColumn),
             ("TOGGLE_PIN_LEFT", Command::TogglePinLeft),
             ("TOGGLE_PIN_RIGHT", Command::TogglePinRight),
         ];

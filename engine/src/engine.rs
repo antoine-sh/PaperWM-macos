@@ -22,6 +22,8 @@ pub struct Config {
     pub gap: f64,
     /// Column widths `CycleWidth` steps through, as fractions of the screen.
     pub width_presets: Vec<f64>,
+    /// Share of the screen `WidenColumn` and `NarrowColumn` add or take away.
+    pub width_step: f64,
     /// One name per workspace.
     pub workspace_names: Vec<String>,
     /// Seconds the strip takes to slide to a new scroll position; 0 jumps.
@@ -62,6 +64,7 @@ impl Default for Config {
         Self {
             gap: 8.0,
             width_presets: vec![1.0 / 3.0, 0.5, 2.0 / 3.0],
+            width_step: 0.1,
             workspace_names: (1..=WORKSPACE_COUNT).map(|i| i.to_string()).collect(),
             animation_duration: 0.25,
             center_focused: CenterFocus::Never,
@@ -76,10 +79,10 @@ impl Config {
         self.app_rules.iter().find(|r| r.app == app)
     }
 
-    /// Parses the app's settings; missing or empty fields take their
-    /// defaults. Returns `None` for malformed JSON or a negative gap or
-    /// animation duration. Rules naming a workspace that does not exist are
-    /// dropped.
+    /// Parses the app's settings; missing or empty fields, and a width step
+    /// that is not positive, take their defaults. Returns `None` for
+    /// malformed JSON or a negative gap or animation duration. Rules naming a
+    /// workspace that does not exist are dropped.
     pub fn from_json(json: &str) -> Option<Self> {
         let mut config: Config = serde_json::from_str(json).ok()?;
         if !(config.gap >= 0.0 && config.animation_duration >= 0.0) {
@@ -88,6 +91,9 @@ impl Config {
         let defaults = Config::default();
         if config.width_presets.is_empty() {
             config.width_presets = defaults.width_presets;
+        }
+        if config.width_step <= 0.0 {
+            config.width_step = defaults.width_step;
         }
         config.workspace_names.truncate(WORKSPACE_COUNT);
         let have = config.workspace_names.len();
@@ -138,6 +144,9 @@ pub enum Command {
     ScrollEnd,
     FocusFirst,
     FocusLast,
+    /// Widens the focused column by `Config::width_step` of the screen.
+    WidenColumn,
+    NarrowColumn,
     /// Pins the focused column to the left edge, or unpins it.
     TogglePinLeft,
     /// Pins the focused column to the right edge, or unpins it.
@@ -181,8 +190,10 @@ impl Command {
             28 => ScrollEnd,
             29 => FocusFirst,
             30 => FocusLast,
-            31 => TogglePinLeft,
-            32 => TogglePinRight,
+            31 => WidenColumn,
+            32 => NarrowColumn,
+            33 => TogglePinLeft,
+            34 => TogglePinRight,
             _ => return None,
         })
     }
@@ -491,7 +502,8 @@ impl Engine {
                 self.applier.forget(id);
             }
         }
-        self.info = current;
+        let previous = std::mem::replace(&mut self.info, current);
+        self.follow_tabs(&previous);
 
         self.scratch.retain(|(id, _)| self.info.contains_key(id));
         self.mru.retain(|id| self.info.contains_key(id));
@@ -594,6 +606,36 @@ impl Engine {
         self.apply()
     }
 
+    /// Gives the place of each managed window that went away to the tab that
+    /// came forward in its native tab group, one it hid or one hiding it, so
+    /// opening, switching and closing tabs keep the group's column.
+    fn follow_tabs(&mut self, previous: &HashMap<WindowId, WindowInfo>) {
+        for (&old, info) in previous {
+            if self.info.contains_key(&old) {
+                continue;
+            }
+            let managed =
+                |id| self.scratch.iter().any(|&(w, _)| w == id) || self.workspaces.iter().any(|w| w.contains(id));
+            let Some(new) = self
+                .info
+                .values()
+                .find(|w| w.pid == info.pid && (w.tabs.contains(&old) || info.tabs.contains(&w.id)) && !managed(w.id))
+                .map(|w| w.id)
+            else {
+                continue;
+            };
+            for workspace in &mut self.workspaces {
+                workspace.replace_window(old, new);
+            }
+            for id in self.scratch.iter_mut().map(|(id, _)| id).chain(&mut self.mru) {
+                if *id == old {
+                    *id = new;
+                }
+            }
+            self.applier.forget(old);
+        }
+    }
+
     /// Puts every window back in its place, including ones that seemed to
     /// refuse it, and syncs.
     pub fn retile(&mut self) -> Result<()> {
@@ -659,6 +701,8 @@ impl Engine {
             }
             Command::FocusFirst => ws.focus_edge(false),
             Command::FocusLast => ws.focus_edge(true),
+            Command::WidenColumn => ws.nudge_width(self.config.width_step * viewport, viewport),
+            Command::NarrowColumn => ws.nudge_width(-self.config.width_step * viewport, viewport),
             Command::TogglePinLeft => ws.toggle_pin(Pin::Left, viewport, gap),
             Command::TogglePinRight => ws.toggle_pin(Pin::Right, viewport, gap),
         };
@@ -1079,6 +1123,72 @@ mod tests {
         assert_eq!(backend.frame_of(2).unwrap().x, 316.0);
     }
 
+    fn widths(engine: &Engine) -> Vec<f64> {
+        engine.workspace(0).unwrap().columns().iter().map(|c| c.width()).collect()
+    }
+
+    #[test]
+    fn tab_group_keeps_one_column_that_follows_the_shown_tab() {
+        let windows = vec![window(1, 0.0, 300.0), window(2, 400.0, 500.0), window(4, 950.0, 200.0)];
+        let (mut engine, backend) = engine_with(windows);
+        engine.sync().unwrap();
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        let column = backend.frame_of(2).unwrap();
+
+        backend.add_tab(2, 3);
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![4]]);
+        assert_eq!(widths(&engine), vec![300.0, 500.0, 200.0]);
+
+        backend.select_tab(2);
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2], vec![4]]);
+
+        // Closing the shown tab brings the next one forward in its place.
+        backend.remove(2);
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![4]]);
+        assert_eq!(backend.frame_of(3), Some(column));
+        assert_eq!(engine.state().focused_window, Some(3));
+    }
+
+    #[test]
+    fn closing_a_background_tab_changes_nothing() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        backend.add_tab(1, 2);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![2]]);
+        let calls = backend.set_frame_calls();
+
+        backend.remove(1);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![2]]);
+        assert_eq!(backend.set_frame_calls(), calls);
+    }
+
+    #[test]
+    fn detached_tab_opens_its_own_column() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        backend.add_tab(1, 2);
+        backend.add_tab(2, 3);
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![3]]);
+
+        backend.detach_tab(1, Rect::new(500.0, 100.0, 400.0, 300.0));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![3], vec![1]]);
+
+        // The shown tab keeps its column; the tab behind it opens beside it.
+        backend.detach_tab(3, Rect::new(600.0, 100.0, 400.0, 300.0));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![3], vec![2], vec![1]]);
+    }
+
     #[test]
     fn background_app_window_keeps_focus_and_scroll() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 600.0), window(2, 100.0, 600.0)]);
@@ -1149,6 +1259,30 @@ mod tests {
         assert_eq!(backend.frame_of(2).unwrap().x, 8.0);
         assert_eq!(engine.command(Command::FocusRight), Ok(true));
         assert_eq!(engine.command(Command::FocusRight), Ok(false));
+    }
+
+    #[test]
+    fn widen_column_resizes_and_scrolls_it_into_view() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 400.0), window(2, 500.0, 500.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::FocusRight).unwrap();
+        assert_eq!(engine.command(Command::WidenColumn), Ok(true));
+        assert_eq!(engine.workspace(0).unwrap().scroll(), 8.0);
+        assert_eq!(backend.frame_of(2), Some(Rect::new(408.0, 33.0, 600.0, 584.0)));
+        assert_eq!(engine.command(Command::NarrowColumn), Ok(true));
+        assert_eq!(engine.workspace(0).unwrap().scroll(), 0.0);
+        assert_eq!(backend.frame_of(2).unwrap().width, 500.0);
+    }
+
+    #[test]
+    fn width_step_sets_how_far_widen_and_narrow_go() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.set_config(Config { width_step: 0.25, animation_duration: 0.0, ..Config::default() }).unwrap();
+        engine.sync().unwrap();
+        engine.command(Command::WidenColumn).unwrap();
+        assert_eq!(backend.frame_of(1).unwrap().width, 550.0);
+        engine.command(Command::NarrowColumn).unwrap();
+        assert_eq!(backend.frame_of(1).unwrap().width, 300.0);
     }
 
     #[test]
@@ -1411,6 +1545,16 @@ mod tests {
     }
 
     #[test]
+    fn tab_group_keeps_its_scratch_place() {
+        let (mut engine, backend) = engine_with_scratch();
+        backend.add_tab(2, 3);
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1]]);
+        assert_eq!(engine.state().scratch, vec![3]);
+    }
+
+    #[test]
     fn move_to_scratch_floats_window_centered() {
         let (engine, backend) = engine_with_scratch();
         assert_eq!(columns(&engine), vec![vec![1]]);
@@ -1553,8 +1697,7 @@ mod tests {
     fn command_parsing_rejects_unknown_values() {
         assert_eq!(Command::parse(0, 0.0), Some(Command::FocusLeft));
         assert_eq!(Command::parse(12, 0.0), Some(Command::Expel));
-        assert_eq!(Command::parse(32, 0.0), Some(Command::TogglePinRight));
-        assert_eq!(Command::parse(33, 0.0), None);
+        assert_eq!(Command::parse(u32::MAX, 0.0), None);
     }
 
     #[test]
@@ -1573,6 +1716,7 @@ mod tests {
         let config = Config::from_json(r#"{"gap":4}"#).unwrap();
         assert_eq!(config.gap, 4.0);
         assert_eq!(config.width_presets, Config::default().width_presets);
+        assert_eq!(config.width_step, 0.1);
         assert_eq!(config.workspace_names, (1..=9).map(|i| i.to_string()).collect::<Vec<_>>());
 
         let config = Config::from_json(r#"{"width_presets":[],"workspace_names":["Web"]}"#).unwrap();
@@ -1584,6 +1728,7 @@ mod tests {
         assert_eq!(Config::from_json("nope"), None);
         assert_eq!(Config::from_json(r#"{"gap":-3}"#), None);
         assert_eq!(Config::from_json(r#"{"animation_duration":-1}"#), None);
+        assert_eq!(Config::from_json(r#"{"width_step":0}"#).unwrap().width_step, 0.1);
         assert_eq!(
             Config::from_json(r#"{"center_focused":"on_overflow"}"#).unwrap().center_focused,
             CenterFocus::OnOverflow
