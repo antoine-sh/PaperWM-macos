@@ -615,6 +615,11 @@ mod tests {
         assert!(ws.nudge_width(-2000.0, VIEW));
         assert_eq!(ws.columns()[0].width(), MIN_COLUMN_WIDTH);
         assert!(!ws.nudge_width(-100.0, VIEW));
+        // A nudge after full width keeps the new width; toggling goes full again.
+        ws.toggle_full_width(VIEW);
+        ws.nudge_width(-100.0, VIEW);
+        ws.toggle_full_width(VIEW);
+        assert_eq!(ws.columns()[0].width(), VIEW);
     }
 
     #[test]

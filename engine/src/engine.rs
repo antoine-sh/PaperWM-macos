@@ -80,9 +80,9 @@ impl Config {
     }
 
     /// Parses the app's settings; missing or empty fields, and a width step
-    /// that is not positive, take their defaults. Returns `None` for malformed JSON or a negative gap or
-    /// animation duration. Rules naming a workspace that does not exist are
-    /// dropped.
+    /// that is not positive, take their defaults. Returns `None` for
+    /// malformed JSON or a negative gap or animation duration. Rules naming a
+    /// workspace that does not exist are dropped.
     pub fn from_json(json: &str) -> Option<Self> {
         let mut config: Config = serde_json::from_str(json).ok()?;
         if !(config.gap >= 0.0 && config.animation_duration >= 0.0) {
