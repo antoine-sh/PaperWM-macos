@@ -23,6 +23,9 @@ pub struct WindowInfo {
     /// dialogs because a column would only stretch or squeeze them.
     pub is_resizable: bool,
     pub is_minimized: bool,
+    /// In macOS native fullscreen, on a Space of its own. macOS owns its
+    /// frame until it leaves, so it keeps its column but is not moved.
+    pub is_fullscreen: bool,
     /// The background tabs of this window's native tab group (Finder,
     /// Terminal, Safari). macOS makes each tab a window, but only the shown
     /// one is listed and tiled; the others hide behind it at the same frame.

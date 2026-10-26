@@ -43,6 +43,7 @@ impl MockBackend {
             is_standard: true,
             is_resizable: true,
             is_minimized: false,
+            is_fullscreen: false,
             tabs: Vec::new(),
         }
     }
