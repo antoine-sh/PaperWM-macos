@@ -37,9 +37,9 @@ const WINDOW_ATTRIBUTES: [&str; 6] = [
 struct CachedWindow {
     element: AxElement,
     pid: i32,
-    /// A window read as it is created may not have its subrole yet, so it
-    /// is read until the window is standard. From then on it stays so, so a
-    /// read mid-transition cannot take the window out of its column.
+    /// Latched: once a read finds the window standard, it stays standard.
+    /// A window read as it is created may not have its subrole yet, and a
+    /// read mid-close or mid-transition must not take it out of its column.
     is_standard: bool,
     /// Resizability never changes, so it is read once per window.
     /// `None` until the app answers, so a busy app is asked again later.
