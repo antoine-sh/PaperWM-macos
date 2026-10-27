@@ -33,8 +33,16 @@ struct SettingsView: View {
     }
 
     /// Still on while it waits for approval in System Settings › Login Items.
-    private static var isLaunchAtLogin: Bool {
+    static var isLaunchAtLogin: Bool {
         [.enabled, .requiresApproval].contains(SMAppService.mainApp.status)
+    }
+
+    static func setLaunchAtLogin(_ on: Bool) {
+        do {
+            try on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+        } catch {
+            NSLog("PaperWM: launch at login: \(error)")
+        }
     }
 
     private var general: some View {
@@ -43,11 +51,7 @@ struct SettingsView: View {
                 Toggle("Launch at login", isOn: Binding(
                     get: { launchAtLogin },
                     set: { on in
-                        do {
-                            try on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
-                        } catch {
-                            NSLog("PaperWM: launch at login: \(error)")
-                        }
+                        Self.setLaunchAtLogin(on)
                         launchAtLogin = Self.isLaunchAtLogin
                     }
                 ))

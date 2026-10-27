@@ -10,6 +10,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var trustTimer: Timer?
     private var state: EngineState?
     private let settingsWindow = SettingsWindowController()
+    private lazy var onboarding = OnboardingWindowController { [weak self] in
+        self?.manager?.settings.hotKeys ?? HotKey.defaults
+    }
 
     static func main() {
         let app = NSApplication.shared
@@ -30,7 +33,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if Engine.isTrusted() {
             startManager()
         } else {
-            _ = Engine.isTrusted(prompt: true)
+            // A first launch, or a rebuild that lost the permission: the guide explains and asks for it.
+            onboarding.show()
             waitForTrust()
         }
     }
@@ -88,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             shortcuts.submenu = submenu
             menu.addItem(shortcuts)
             menu.addItem(action("Show Windows…", #selector(showWindows)))
+            menu.addItem(action("Welcome Guide…", #selector(showOnboarding)))
             let settings = action("Settings…", #selector(openSettings))
             settings.keyEquivalent = ","
             menu.addItem(settings)
@@ -143,11 +148,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    @objc private func showOnboarding() {
+        onboarding.show()
+    }
+
     @objc private func grantAccess() {
-        _ = Engine.isTrusted(prompt: true)
-        if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
-            NSWorkspace.shared.open(url)
-        }
+        onboarding.show(at: .accessibility)
     }
 
     private func alert(title: String, text: String) {

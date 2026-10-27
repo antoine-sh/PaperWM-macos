@@ -7,6 +7,18 @@ import UniformTypeIdentifiers
 enum Thumbnails {
     static var hasAccess: Bool { CGPreflightScreenCaptureAccess() }
 
+    /// Shows macOS's Screen Recording prompt unless access is granted or it
+    /// was shown before. False when it wasn't shown, so the caller can open
+    /// System Settings instead.
+    @discardableResult
+    static func askForAccessOnce() -> Bool {
+        let key = "askedForScreenRecording"
+        guard !hasAccess, !UserDefaults.standard.bool(forKey: key) else { return false }
+        UserDefaults.standard.set(true, forKey: key)
+        _ = CGRequestScreenCaptureAccess()
+        return true
+    }
+
     /// Captures the windows `ids`, at most `maxSize` points on their long
     /// side, all at once, handing each image over as soon as it is ready.
     static func capture(ids: [UInt32], maxSize: CGFloat,
