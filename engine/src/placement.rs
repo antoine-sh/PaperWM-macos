@@ -14,7 +14,8 @@ pub const PEEK: f64 = 1.0;
 /// monitor whose usable area is `area`. Columns outside the viewport, or that would spill onto
 /// one of the `other_monitors`, are parked against an edge of `area`; with
 /// `separate_spaces`, macOS clips a window to the display holding most of
-/// it, so only columns mostly on another monitor are. Pinned
+/// it, so a column is parked only if one of its windows is at least half on
+/// another monitor. Pinned
 /// columns stay at their edge, and the other columns scrolled under them are
 /// parked. With `original_heights`, a window alone in its column keeps its
 /// height there, clamped to the area, instead of filling it.
@@ -86,7 +87,7 @@ pub fn hidden_frame(frame: Rect, monitors: &[Rect]) -> Rect {
 fn needs_parking(rect: Rect, area: Rect, other_monitors: &[Rect], separate_spaces: bool) -> bool {
     let outside = rect.max_x() <= area.x || rect.x >= area.max_x();
     let taken_by =
-        |m: Rect| if separate_spaces { overlap(rect, m) >= overlap(rect, area) } else { intersects(rect, m) };
+        |m: Rect| if separate_spaces { overlap(rect, m) >= overlap(rect, area) } else { overlap(rect, m) > 0.0 };
     let spills = (rect.x < area.x || rect.max_x() > area.max_x()) && other_monitors.iter().any(|&m| taken_by(m));
     outside || spills
 }
@@ -100,7 +101,7 @@ fn parked(rect: Rect, area: Rect, other_monitors: &[Rect]) -> Rect {
     let bottom = Rect { x: area.x, y: area.max_y() - PEEK, ..rect };
     let centre = rect.x + rect.width / 2.0;
     let sides = if centre < area.x + area.width / 2.0 { [left, right, bottom] } else { [right, left, bottom] };
-    sides.into_iter().find(|r| !other_monitors.iter().any(|m| intersects(*r, *m))).unwrap_or(sides[0])
+    sides.into_iter().find(|r| !other_monitors.iter().any(|m| overlap(*r, *m) > 0.0)).unwrap_or(sides[0])
 }
 
 /// The area `a` and `b` share.
@@ -108,10 +109,6 @@ fn overlap(a: Rect, b: Rect) -> f64 {
     let width = a.max_x().min(b.max_x()) - a.x.max(b.x);
     let height = a.max_y().min(b.max_y()) - a.y.max(b.y);
     width.max(0.0) * height.max(0.0)
-}
-
-fn intersects(a: Rect, b: Rect) -> bool {
-    a.x < b.max_x() && b.x < a.max_x() && a.y < b.max_y() && b.y < a.max_y()
 }
 
 #[cfg(test)]

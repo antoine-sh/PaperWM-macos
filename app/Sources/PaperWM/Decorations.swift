@@ -124,6 +124,7 @@ final class Decorations {
             let overlap = frame.intersection(screen.frame)
             return overlap.isNull ? 0 : overlap.width * overlap.height
         }
+        let separateSpaces = NSScreen.screensHaveSeparateSpaces
         let owner = screens.max { shared($0) < shared($1) }
         while dims.count < screens.count {
             let panel = Self.panel(level: .normal)
@@ -140,7 +141,7 @@ final class Decorations {
             // The hole keeps the focused window clear even if macOS refuses to
             // order the dim below another app's window. With separate Spaces,
             // the window shows only on the screen holding most of it.
-            let shown = !NSScreen.screensHaveSeparateSpaces || screens[index] == owner
+            let shown = !separateSpaces || screens[index] == owner
             view.update(hole: shown ? frame.offsetBy(dx: -screen.minX, dy: -screen.minY) : .zero, radius: radius,
                         amount: values.dimAmount)
             if raised || !panel.isVisible { panel.order(.below, relativeTo: Int(window.id)) }
