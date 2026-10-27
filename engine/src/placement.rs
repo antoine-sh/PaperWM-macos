@@ -45,10 +45,10 @@ pub fn frames(
         let under_pin = column.pinned().is_none()
             && index != workspace.focused_column()
             && ((lead > 0.0 && x < area.x + lead) || (trail > 0.0 && column_rect.max_x() > area.max_x() - trail));
-        let park = under_pin || needs_parking(column_rect, area, other_monitors, separate_spaces);
         let mut y = column_rect.y;
         let original =
             original_heights.filter(|_| column.windows().len() == 1).and_then(|h| h.get(&column.windows()[0]).copied());
+        let mut rects = Vec::new();
         for (i, &id) in column.windows().iter().enumerate() {
             // A tabbed column lays its windows on top of each other.
             let rect = if column.is_tabbed() {
@@ -63,8 +63,11 @@ pub fn frames(
                 Some(h) => Rect { height: h.clamp(1.0, rect.height), ..rect },
                 None => rect,
             };
-            result.push((id, if park { parked(rect, area, other_monitors) } else { rect }));
+            rects.push((id, rect));
         }
+        // macOS gives each window, not each column, to a display.
+        let park = under_pin || rects.iter().any(|&(_, r)| needs_parking(r, area, other_monitors, separate_spaces));
+        result.extend(rects.into_iter().map(|(id, r)| (id, if park { parked(r, area, other_monitors) } else { r })));
     }
     result
 }
@@ -82,7 +85,8 @@ pub fn hidden_frame(frame: Rect, monitors: &[Rect]) -> Rect {
 
 fn needs_parking(rect: Rect, area: Rect, other_monitors: &[Rect], separate_spaces: bool) -> bool {
     let outside = rect.max_x() <= area.x || rect.x >= area.max_x();
-    let taken_by = |m: Rect| if separate_spaces { overlap(rect, m) > overlap(rect, area) } else { intersects(rect, m) };
+    let taken_by =
+        |m: Rect| if separate_spaces { overlap(rect, m) >= overlap(rect, area) } else { intersects(rect, m) };
     let spills = (rect.x < area.x || rect.max_x() > area.max_x()) && other_monitors.iter().any(|&m| taken_by(m));
     outside || spills
 }
@@ -224,6 +228,32 @@ mod tests {
         let shown = super::frames(&ws, ws.scroll(), AREA, GAP, &[right_monitor], true, None);
         // Mostly on the other monitor, which would take it, so it is parked.
         assert_eq!(shown[1].1.x, AREA.x - 600.0 + PEEK);
+    }
+
+    #[test]
+    fn with_separate_spaces_each_stacked_window_must_stay_mostly_on_its_monitor() {
+        let lower_right = Rect::new(1020.0, 290.0, 800.0, 600.0);
+        let mut ws = workspace(&[750.0, 600.0, 600.0]);
+        ws.focus_column(-1);
+        ws.consume();
+        ws.focus_column(-1);
+        ws.ensure_focused_visible(VIEW, GAP);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[lower_right], true, None);
+        // The column is mostly here, but its lower window mostly on the other
+        // monitor, which would take that window, so the column is parked.
+        assert_eq!(frames[1].1.x, AREA.max_x() - PEEK);
+        assert_eq!(frames[2].1.x, AREA.x - 600.0 + PEEK);
+    }
+
+    #[test]
+    fn with_separate_spaces_a_column_split_evenly_is_parked() {
+        let right_monitor = Rect::new(1020.0, 0.0, 800.0, 600.0);
+        let mut ws = workspace(&[700.0, 600.0]);
+        ws.focus_column(-1);
+        ws.ensure_focused_visible(VIEW, GAP);
+        let frames = frames(&ws, ws.scroll(), AREA, GAP, &[right_monitor], true, None);
+        // 300 points on each monitor: macOS could pick either.
+        assert_eq!(frames[1].1.x, AREA.x - 600.0 + PEEK);
     }
 
     #[test]

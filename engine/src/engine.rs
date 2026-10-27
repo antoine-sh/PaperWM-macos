@@ -1542,6 +1542,19 @@ mod tests {
     }
 
     #[test]
+    fn columns_overhang_a_neighbouring_monitor_only_with_separate_spaces() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 600.0), window(2, 100.0, 600.0)]);
+        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.sync().unwrap();
+        engine.command(Command::FocusLeft).unwrap();
+        // 400 of its 600 points are on this monitor, so macOS shows it here.
+        assert_eq!(backend.frame_of(2).unwrap().x, 616.0);
+        engine.set_config(Config { separate_spaces: false, animation_duration: 0.0, ..Config::default() }).unwrap();
+        // Without separate Spaces it would show on the right monitor too.
+        assert_eq!(backend.frame_of(2).unwrap().x, SCREEN.x - 600.0 + placement::PEEK);
+    }
+
+    #[test]
     fn windows_go_to_the_monitor_they_are_on() {
         let (mut engine, _) = engine_with(vec![window(1, 0.0, 300.0), window(2, 1200.0, 300.0)]);
         engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
