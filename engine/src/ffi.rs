@@ -207,18 +207,6 @@ pub unsafe extern "C" fn pwm_engine_drop(engine: *mut Engine, x: f64, y: f64) ->
     status(engine.drop_at(x, y))
 }
 
-/// Puts every window back in its place and syncs.
-///
-/// # Safety
-/// `engine` must be a live pointer from `pwm_engine_new`, or null.
-#[no_mangle]
-pub unsafe extern "C" fn pwm_engine_retile(engine: *mut Engine) -> PwmStatus {
-    let Some(engine) = engine.as_mut() else {
-        return PwmStatus::NullPointer;
-    };
-    status(engine.retile())
-}
-
 /// Runs one of the `PWM_COMMAND_*` actions. `arg` is the workspace index,
 /// window id or scroll distance for commands that take one, else ignored.
 /// `changed`, if not null, is set to whether the command changed anything.
@@ -400,7 +388,6 @@ mod tests {
         unsafe {
             assert_eq!(pwm_engine_list_windows(ptr::null()).status, PwmStatus::NullPointer);
             assert_eq!(pwm_engine_sync(ptr::null_mut()), PwmStatus::NullPointer);
-            assert_eq!(pwm_engine_retile(ptr::null_mut()), PwmStatus::NullPointer);
             assert_eq!(pwm_engine_drop(ptr::null_mut(), 0.0, 0.0), PwmStatus::NullPointer);
             assert_eq!(pwm_engine_command(ptr::null_mut(), 0, 0.0, ptr::null_mut()), PwmStatus::NullPointer);
             let mut status = PwmStatus::Ok;
@@ -543,7 +530,6 @@ mod tests {
             assert!(changed);
             assert_eq!(pwm_engine_command(engine, 99, 0.0, &mut changed), PwmStatus::InvalidArgument);
             assert!(!changed);
-            assert_eq!(pwm_engine_retile(engine), PwmStatus::Ok);
             pwm_engine_free(engine);
         }
     }

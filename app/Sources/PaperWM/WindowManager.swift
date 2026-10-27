@@ -5,7 +5,7 @@ import CPaperWMEngine
 /// syncs it when windows change, and routes hot keys to it.
 @MainActor
 final class WindowManager {
-    let engine = Engine()
+    private(set) var engine = Engine()
     let settings = Settings()
     private(set) lazy var hotKeys = HotKeyCenter { [weak self] action in
         self?.perform(action)
@@ -35,13 +35,7 @@ final class WindowManager {
     private var lastLogged: [String: CFTimeInterval] = [:]
 
     func start() {
-        let context = Unmanaged.passUnretained(self).toOpaque()
-        engine.setChangeHandler({ context in
-            guard let context else { return }
-            let manager = Unmanaged<WindowManager>.fromOpaque(context).takeUnretainedValue()
-            MainActor.assumeIsolated { manager.scheduleSync() }
-        }, context: context)
-
+        connectEngine()
         let workspace = NSWorkspace.shared.notificationCenter
         workspace.addObserver(self, selector: #selector(appLaunched(_:)),
                               name: NSWorkspace.didLaunchApplicationNotification, object: nil)
@@ -54,15 +48,25 @@ final class WindowManager {
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged(_:)),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
 
-        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
-            engine.observeApp(app.processIdentifier)
-        }
         settings.onChange = { [weak self] in self?.applySettings() }
         applySettings()
         updateMonitors()
         modifiers.start()
         drags.start()
         gestures.start()
+    }
+
+    /// Hooks the engine up to change notifications and every running app.
+    private func connectEngine() {
+        let context = Unmanaged.passUnretained(self).toOpaque()
+        engine.setChangeHandler({ context in
+            guard let context else { return }
+            let manager = Unmanaged<WindowManager>.fromOpaque(context).takeUnretainedValue()
+            MainActor.assumeIsolated { manager.scheduleSync() }
+        }, context: context)
+        for app in NSWorkspace.shared.runningApplications where app.activationPolicy == .regular {
+            engine.observeApp(app.processIdentifier)
+        }
     }
 
     /// Pauses global shortcuts, e.g. while one is being recorded.
@@ -195,10 +199,16 @@ final class WindowManager {
         publish()
     }
 
-    /// Puts every window back in its place, including ones that were moved.
+    /// Restarts the engine from scratch: forgets all layout and observers,
+    /// then re-reads every app, window and monitor as on launch.
     func retile() {
-        report { try engine.retile() }
-        publish()
+        frames.stop()
+        syncDeferred = false
+        engine = Engine()
+        connectEngine()
+        appliedConfig = ""
+        applySettings()
+        updateMonitors()
     }
 
     private func updateMonitors() {
