@@ -106,7 +106,10 @@ final class Decorations {
         let frame = window.frame.flippedForScreens
         let radius = radius(of: window.id)
 
-        if values.focusBorder {
+        // A window covering a whole screen, e.g. in native fullscreen, has
+        // nowhere to draw a border.
+        let coversScreen = NSScreen.screens.contains { $0.frame == frame }
+        if values.focusBorder, !coversScreen {
             let width = values.borderWidth
             borderView.radius = radius
             border.setFrame(frame.insetBy(dx: -width, dy: -width), display: false)
