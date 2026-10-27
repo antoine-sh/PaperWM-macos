@@ -62,7 +62,7 @@ final class Switcher {
                               width: size.width, height: size.height), display: true)
         panel.orderFrontRegardless()
 
-        Self.askForScreenRecordingOnce()
+        Thumbnails.askForAccessOnce()
         let ids = model.windows.map(\.id)
         thumbnailTask = Task { [model] in
             await Thumbnails.capture(ids: ids, maxSize: SwitcherView.cardSize.width) { id, image in
@@ -75,15 +75,6 @@ final class Switcher {
         thumbnailTask?.cancel()
         thumbnailTask = nil
         panel.orderOut(nil)
-    }
-
-    /// Shows macOS's Screen Recording prompt the first time the switcher
-    /// opens without access; previews appear once it is granted.
-    private static func askForScreenRecordingOnce() {
-        let key = "askedForScreenRecording"
-        guard !Thumbnails.hasAccess, !UserDefaults.standard.bool(forKey: key) else { return }
-        UserDefaults.standard.set(true, forKey: key)
-        _ = CGRequestScreenCaptureAccess()
     }
 }
 

@@ -48,7 +48,8 @@ fit, and you never drag a window into place again.
 - **Minimap**: an overview of the strip appears briefly while you navigate. In Settings, pick the strip view or a small toolbar of app icons along the bottom of the screen (one per column, focused one highlighted).
 - **Focus highlight**: optionally draw a colored border around the focused window and dim the windows behind it. Both are off by default; turn them on from the menu, Settings or their shortcuts. With Screen Recording permission the border matches each window's own rounded corners; otherwise it uses the corner radius set in Settings.
 - **App rules**: in Settings › Apps, pick an app from the running ones (or from the Applications folder) and either float it, so its windows are never tiled or moved and stay on every workspace like dialogs, or give it a fixed slot: its windows open at a set column of a set workspace. Apps are matched by name. Fixed-size windows float even when their app has a slot.
-- **Menu bar**: shows the current workspace's name; the menu switches workspaces, toggles the focus border and dimming, and opens Settings.
+- **Welcome guide**: at launch whenever Accessibility access is missing (so on first launch), a short guide explains the strip, walks through the Accessibility and (optional) Screen Recording permissions, and lists the first shortcuts to learn. Reopen it from the menu with Welcome Guide….
+- **Menu bar**: shows the current workspace's name; the menu switches workspaces, toggles the focus border and dimming, and opens Settings and the welcome guide.
 - **Settings** (⌘, from the menu): launch at login, gaps, column width presets, the widen / narrow step, scroll animation length (0 turns it off), whether to keep the focused column centred (never, when the columns overflow the screen, or always), keep original height (off by default: a window alone in its column keeps the height it had when first tiled, top-aligned, instead of filling the screen; stacked columns still split the full height), workspace names, app rules, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
 
 </details>
@@ -122,7 +123,7 @@ fit, and you never drag a window into place again.
 ## 🔑 Permissions
 
 - **Accessibility** (required): to move, resize and focus windows, and to read the trackpad while ⌃⌥ is held.
-- **Screen Recording** (optional): for window previews in the switcher, and to match the focus border to each window's rounded corners. macOS asks the first time you open the switcher.
+- **Screen Recording** (optional): for window previews in the switcher, and to match the focus border to each window's rounded corners. The welcome guide offers it, and otherwise macOS asks the first time you open the switcher.
 
 ## 🛠️ Building
 
@@ -139,7 +140,7 @@ scripts/make-dmg.sh                # optional: package as build/PaperWM-<version
 CI builds a universal disk image on every push and pull request; download it from the run's **PaperWM-dmg** artifact.
 Pushing a `v*` tag also publishes the disk image as a GitHub release.
 
-On first launch macOS asks you to grant Accessibility access in System Settings › Privacy & Security › Accessibility. Builds are signed ad hoc, so after rebuilding you may need to remove PaperWM from that list and add it again.
+On first launch the welcome guide asks you to grant Accessibility access in System Settings › Privacy & Security › Accessibility; it reappears whenever the permission is missing. Builds are signed ad hoc, so after rebuilding you may need to remove PaperWM from that list and add it again.
 
 Engine tests run anywhere, including Linux:
 
@@ -152,6 +153,6 @@ cargo test
 | Path | Contents |
 | --- | --- |
 | `engine/` | Rust engine: scrolling layout (`workspace.rs`, `placement.rs`), workspaces, monitors, scratch layer, window sync and commands (`engine.rs`), macOS Accessibility backend (`macos/`), C interface (`ffi.rs`, `include/paperwm_engine.h`) |
-| `app/` | Swift menu bar app (SwiftPM package): hot keys, settings, minimap, switcher, trackpad gestures, window drops, app and monitor tracking; links the engine as a static library |
+| `app/` | Swift menu bar app (SwiftPM package): hot keys, welcome guide, settings, minimap, switcher, trackpad gestures, window drops, app and monitor tracking; links the engine as a static library |
 | `scripts/build-app.sh` | Builds both and assembles `build/PaperWM.app` |
 | `scripts/make-dmg.sh` | Packages the app as a `.dmg` |

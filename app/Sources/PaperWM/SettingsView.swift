@@ -33,8 +33,16 @@ struct SettingsView: View {
     }
 
     /// Still on while it waits for approval in System Settings › Login Items.
-    private static var isLaunchAtLogin: Bool {
+    static var isLaunchAtLogin: Bool {
         [.enabled, .requiresApproval].contains(SMAppService.mainApp.status)
+    }
+
+    static func setLaunchAtLogin(_ on: Bool) {
+        do {
+            try on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
+        } catch {
+            NSLog("PaperWM: launch at login: \(error)")
+        }
     }
 
     private var general: some View {
@@ -43,11 +51,7 @@ struct SettingsView: View {
                 Toggle("Launch at login", isOn: Binding(
                     get: { launchAtLogin },
                     set: { on in
-                        do {
-                            try on ? SMAppService.mainApp.register() : SMAppService.mainApp.unregister()
-                        } catch {
-                            NSLog("PaperWM: launch at login: \(error)")
-                        }
+                        Self.setLaunchAtLogin(on)
                         launchAtLogin = Self.isLaunchAtLogin
                     }
                 ))
@@ -393,6 +397,18 @@ final class ShortcutRecorder: ObservableObject {
     }
 }
 
+@MainActor
+extension NSWindow {
+    /// Brings the window of this menu bar app in front of the active app's.
+    func present() {
+        NSApp.activate()
+        makeKeyAndOrderFront(nil)
+        // macOS 14 may decline the activation above, leaving the window
+        // behind the front app's windows.
+        orderFrontRegardless()
+    }
+}
+
 /// Owns the Settings window so it can be reopened.
 @MainActor
 final class SettingsWindowController: NSObject, NSWindowDelegate {
@@ -414,12 +430,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             window.delegate = self
             self.window = window
         }
-        NSApp.activate()
         window?.center()
-        window?.makeKeyAndOrderFront(nil)
-        // macOS 14 may decline the activation above, leaving the window
-        // behind the front app's windows.
-        window?.orderFrontRegardless()
+        window?.present()
     }
 
     // Closing mid-recording must give the global shortcuts back.
