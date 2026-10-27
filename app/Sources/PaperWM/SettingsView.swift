@@ -397,6 +397,18 @@ final class ShortcutRecorder: ObservableObject {
     }
 }
 
+@MainActor
+extension NSWindow {
+    /// Brings the window of this menu bar app in front of the active app's.
+    func present() {
+        NSApp.activate()
+        makeKeyAndOrderFront(nil)
+        // macOS 14 may decline the activation above, leaving the window
+        // behind the front app's windows.
+        orderFrontRegardless()
+    }
+}
+
 /// Owns the Settings window so it can be reopened.
 @MainActor
 final class SettingsWindowController: NSObject, NSWindowDelegate {
@@ -418,12 +430,8 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             window.delegate = self
             self.window = window
         }
-        NSApp.activate()
         window?.center()
-        window?.makeKeyAndOrderFront(nil)
-        // macOS 14 may decline the activation above, leaving the window
-        // behind the front app's windows.
-        window?.orderFrontRegardless()
+        window?.present()
     }
 
     // Closing mid-recording must give the global shortcuts back.

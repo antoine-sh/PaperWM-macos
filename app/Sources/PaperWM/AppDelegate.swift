@@ -10,9 +10,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var trustTimer: Timer?
     private var state: EngineState?
     private let settingsWindow = SettingsWindowController()
-    private lazy var onboarding = OnboardingWindowController { [weak self] in
-        self?.manager?.settings.hotKeys ?? HotKey.defaults
-    }
+    private let onboarding = OnboardingWindowController()
 
     static func main() {
         let app = NSApplication.shared

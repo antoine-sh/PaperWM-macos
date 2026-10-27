@@ -96,7 +96,8 @@ struct OnboardingView: View {
             text: "PaperWM uses it to move, resize and focus other apps' windows, and to read the trackpad for "
                 + "panning. It is the only permission PaperWM needs, and System Integrity Protection stays on.",
             granted: model.trusted,
-            hint: "Turn on PaperWM in Privacy & Security › Accessibility. This page updates by itself.",
+            hint: "Turn on PaperWM in Privacy & Security › Accessibility. If it is already on, remove it with − "
+                + "and add it again: a rebuilt app counts as a new one. This page updates by itself.",
             grant: {
                 _ = Engine.isTrusted(prompt: true)
                 OnboardingView.openPrivacySettings("Privacy_Accessibility")
@@ -205,15 +206,16 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private var timer: Timer?
     private let model = OnboardingModel()
-    /// The current shortcuts, with the user's overrides.
-    private let hotKeys: @MainActor () -> [HotKey]
 
-    init(hotKeys: @escaping @MainActor () -> [HotKey]) {
-        self.hotKeys = hotKeys
-    }
-
-    func show(at step: OnboardingModel.Step = .welcome) {
-        model.step = step
+    /// Without `step`, an open guide stays where it is and a closed one starts over.
+    func show(at step: OnboardingModel.Step? = nil) {
+        if let step {
+            model.step = step
+        } else if window?.isVisible != true {
+            model.step = .welcome
+        }
+        // Read from the stored settings, which also works before the window manager starts.
+        model.combos = Dictionary(Settings().hotKeys.map { ($0.id, $0.combo.symbol) }, uniquingKeysWith: { a, _ in a })
         refresh()
         if window == nil {
             let view = OnboardingView(model: model) { [weak self] in self?.window?.close() }
@@ -229,7 +231,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
             MainActor.assumeIsolated { self?.refresh() }
         }
         window?.center()
-        bringToFront()
+        window?.present()
     }
 
     func windowWillClose(_ notification: Notification) {
@@ -243,17 +245,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
         if trusted != model.trusted { model.trusted = trusted }
         let screenRecording = Thumbnails.hasAccess
         if screenRecording != model.screenRecording { model.screenRecording = screenRecording }
-        let combos = Dictionary(hotKeys().map { ($0.id, $0.combo.symbol) }, uniquingKeysWith: { first, _ in first })
-        if combos != model.combos { model.combos = combos }
         // The user is in System Settings; bring them back to carry on.
-        if trusted, !wasTrusted, model.step == .accessibility, window?.isVisible == true { bringToFront() }
-    }
-
-    private func bringToFront() {
-        NSApp.activate()
-        window?.makeKeyAndOrderFront(nil)
-        // macOS 14 may decline the activation above, leaving the window
-        // behind the front app's windows.
-        window?.orderFrontRegardless()
+        if trusted, !wasTrusted, model.step == .accessibility, window?.isVisible == true { window?.present() }
     }
 }
