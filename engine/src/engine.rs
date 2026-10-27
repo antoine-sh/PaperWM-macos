@@ -690,14 +690,6 @@ impl Engine {
         }
     }
 
-    /// Puts every window back in its place, including ones that seemed to
-    /// refuse it, and syncs.
-    pub fn retile(&mut self) -> Result<()> {
-        self.applier.clear();
-        self.backend.invalidate();
-        self.sync()
-    }
-
     /// Runs a keyboard command on the active monitor. Returns whether it
     /// changed anything.
     pub fn command(&mut self, command: Command) -> Result<bool> {
@@ -2282,9 +2274,6 @@ mod tests {
         let calls = backend.set_frame_calls();
         engine.sync().unwrap();
         assert_eq!(backend.set_frame_calls(), calls);
-
-        engine.retile().unwrap();
-        assert_eq!(backend.set_frame_calls(), calls + 1);
     }
 
     #[test]

@@ -120,9 +120,6 @@ PwmStatus pwm_engine_sync(PwmEngine *engine);
 // coordinates): a tiled window dragged there moves into the column under it.
 PwmStatus pwm_engine_drop(PwmEngine *engine, double x, double y);
 
-// Puts every window back in its place and syncs.
-PwmStatus pwm_engine_retile(PwmEngine *engine);
-
 // `command` is a PwmCommand value; `arg` is ignored by commands without one.
 // `changed`, if not null, is set to whether the command changed anything.
 PwmStatus pwm_engine_command(PwmEngine *engine, uint32_t command, double arg, bool *changed);
