@@ -11,12 +11,12 @@ use crate::workspace::{Pin, Workspace};
 pub const PEEK: f64 = 1.0;
 
 /// Frames for every window of `workspace`, scrolled to `scroll`, shown on a
-/// monitor whose usable area is `area`. Columns outside the viewport, or that would spill onto
-/// one of the `other_monitors`, are parked against an edge of `area`: macOS
-/// would show the spill there, even with "Displays have separate Spaces".
-/// Pinned columns stay at their edge, and the other columns scrolled under them are
-/// parked. With `original_heights`, a window alone in its column keeps its
-/// height there, clamped to the area, instead of filling it.
+/// monitor whose usable area is `area`. Columns outside the viewport, or that
+/// would spill onto one of the `other_monitors`, are parked against an edge of
+/// `area`: macOS would show the spill there, even with "Displays have separate
+/// Spaces". Pinned columns stay at their edge, and the other columns scrolled
+/// under them are parked. With `original_heights`, a window alone in its
+/// column keeps its height there, clamped to the area, instead of filling it.
 pub fn frames(
     workspace: &Workspace,
     scroll: f64,
