@@ -103,11 +103,6 @@ final class Engine {
         if let error = EngineError(pwm_engine_drop(handle, point.x, point.y)) { throw error }
     }
 
-    /// Puts every window back in its place and syncs.
-    func retile() throws {
-        if let error = EngineError(pwm_engine_retile(handle)) { throw error }
-    }
-
     /// Runs `command`. Returns whether it changed anything.
     @discardableResult
     func run(_ command: PwmCommand, arg: Double = 0) throws -> Bool {
