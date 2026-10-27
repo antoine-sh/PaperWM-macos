@@ -485,8 +485,8 @@ impl Workspace {
         } else if x + width > self.scroll + room {
             self.scroll = x + width - room;
         }
-        // Never leave empty space before the first column, e.g. after a pan.
-        self.scroll = self.scroll.max(0.0);
+        // Never leave empty space past either end, e.g. after a pan.
+        self.scroll = self.scroll.min(self.strip_width(gap) - viewport).max(0.0);
     }
 
     /// Brings the focused column into view the way `mode` asks.
@@ -876,6 +876,16 @@ mod tests {
         ws.scroll_by(100.0, VIEW, GAP);
         ws.ensure_focused_visible(VIEW, GAP);
         assert_eq!(ws.scroll(), 0.0);
+    }
+
+    #[test]
+    fn pan_past_the_end_springs_back() {
+        let mut ws = workspace(&[400.0, 400.0, 400.0]);
+        ws.scroll_by(5000.0, VIEW, GAP);
+        ws.focus_nearest_centre(VIEW, GAP);
+        ws.ensure_focused_visible(VIEW, GAP);
+        // The strip's right edge meets the viewport's instead of stopping mid-screen.
+        assert_eq!(ws.scroll(), 1220.0 - VIEW);
     }
 
     #[test]
