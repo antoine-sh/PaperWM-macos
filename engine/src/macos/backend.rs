@@ -37,7 +37,9 @@ const WINDOW_ATTRIBUTES: [&str; 6] = [
 struct CachedWindow {
     element: AxElement,
     pid: i32,
-    /// Kept for when a later read of the subrole fails.
+    /// A window read as it is created may not have its subrole yet, so it
+    /// is read until the window is standard. From then on it stays so, so a
+    /// read mid-transition cannot take the window out of its column.
     is_standard: bool,
     /// Resizability never changes, so it is read once per window.
     /// `None` until the app answers, so a busy app is asked again later.
@@ -227,12 +229,8 @@ impl WindowBackend for AxBackend {
                 let [position, size, title, subrole, minimized, fullscreen] = &values[..] else { continue };
                 let is_fullscreen = fullscreen.as_ref().and_then(as_bool).unwrap_or(false);
                 let cached = previous.get(&id);
-                // A window read as it is created may not have its subrole
-                // yet, so it is read every time; a failed read keeps the last.
-                let is_standard = match subrole.as_ref().and_then(as_string) {
-                    Some(subrole) => subrole == kAXStandardWindowSubrole,
-                    None => cached.is_some_and(|cached| cached.is_standard),
-                };
+                let is_standard = cached.is_some_and(|cached| cached.is_standard)
+                    || subrole.as_ref().and_then(as_string).as_deref() == Some(kAXStandardWindowSubrole);
                 let origin = position.as_ref().and_then(as_point).unwrap_or_default();
                 let size = size.as_ref().and_then(as_size).unwrap_or_default();
                 let frame = Rect::new(origin.x, origin.y, size.width, size.height);
