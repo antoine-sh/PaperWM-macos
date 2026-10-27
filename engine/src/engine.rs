@@ -38,6 +38,10 @@ pub struct Config {
     /// Lets a window alone in its column keep the height it had when first
     /// tiled, top-aligned, instead of filling the screen height.
     pub keep_original_height: bool,
+    /// Whether "Displays have separate Spaces" is on, as it is by default.
+    /// macOS then draws a window only on the display holding most of it, so
+    /// a column may overhang a neighbouring monitor without showing there.
+    pub separate_spaces: bool,
 }
 
 /// Placement for every window of one app.
@@ -76,6 +80,7 @@ impl Default for Config {
             center_focused: CenterFocus::Never,
             app_rules: Vec::new(),
             keep_original_height: false,
+            separate_spaces: true,
         }
     }
 }
@@ -362,7 +367,8 @@ impl Engine {
     pub fn set_config(&mut self, config: Config) -> Result<()> {
         let relayout = config.gap != self.config.gap
             || config.center_focused != self.config.center_focused
-            || config.keep_original_height != self.config.keep_original_height;
+            || config.keep_original_height != self.config.keep_original_height
+            || config.separate_spaces != self.config.separate_spaces;
         let resnap = relayout || config.animation_duration != self.config.animation_duration;
         let rules_changed = config.app_rules != self.config.app_rules;
         self.config = config;
@@ -1078,7 +1084,15 @@ impl Engine {
             let workspace = &self.workspaces[monitor.workspace];
             let scroll = self.animator.shown(monitor.workspace);
             let heights = self.config.keep_original_height.then_some(&self.original_heights);
-            frames.extend(placement::frames(workspace, scroll, monitor.area, self.config.gap, &others, heights));
+            frames.extend(placement::frames(
+                workspace,
+                scroll,
+                monitor.area,
+                self.config.gap,
+                &others,
+                self.config.separate_spaces,
+                heights,
+            ));
         }
         for (index, workspace) in self.workspaces.iter().enumerate() {
             if self.monitors.iter().any(|m| m.workspace == index) {
