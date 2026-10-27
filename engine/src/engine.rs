@@ -1188,6 +1188,20 @@ mod tests {
     }
 
     #[test]
+    fn new_window_read_before_it_is_standard_joins_once_it_is() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.sync().unwrap();
+        // macOS reports a window being created without its subrole for a moment.
+        backend.add(WindowInfo { is_standard: false, ..window(2, 400.0, 300.0) });
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1]]);
+
+        backend.update(2, |w| w.is_standard = true);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+    }
+
+    #[test]
     fn fixed_size_windows_float() {
         let mut calculator = window(2, 0.0, 230.0);
         calculator.is_resizable = false;

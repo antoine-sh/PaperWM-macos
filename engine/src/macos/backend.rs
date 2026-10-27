@@ -23,8 +23,8 @@ const TIMED_OUT: Duration = Duration::from_millis((ax::MESSAGING_TIMEOUT * 800.0
 const BACK_OFF: Duration = Duration::from_secs(2);
 /// Not among `accessibility_sys`'s constants.
 const FULL_SCREEN_ATTRIBUTE: &str = "AXFullScreen";
-/// What `windows()` reads of each window, in one round trip. The subrole and
-/// minimized state are not always needed, but asking costs nothing extra.
+/// What `windows()` reads of each window, in one round trip. The minimized
+/// state and fullscreen flag are not always needed, but asking costs nothing extra.
 const WINDOW_ATTRIBUTES: [&str; 6] = [
     kAXPositionAttribute,
     kAXSizeAttribute,
@@ -37,8 +37,9 @@ const WINDOW_ATTRIBUTES: [&str; 6] = [
 struct CachedWindow {
     element: AxElement,
     pid: i32,
-    /// The subrole and resizability never change, so they are read once per window.
+    /// Kept for when a later read of the subrole fails.
     is_standard: bool,
+    /// Resizability never changes, so it is read once per window.
     /// `None` until the app answers, so a busy app is asked again later.
     is_resizable: Option<bool>,
     app_name: String,
@@ -226,9 +227,11 @@ impl WindowBackend for AxBackend {
                 let [position, size, title, subrole, minimized, fullscreen] = &values[..] else { continue };
                 let is_fullscreen = fullscreen.as_ref().and_then(as_bool).unwrap_or(false);
                 let cached = previous.get(&id);
-                let is_standard = match cached {
-                    Some(cached) => cached.is_standard,
-                    None => subrole.as_ref().and_then(as_string).as_deref() == Some(kAXStandardWindowSubrole),
+                // A window read as it is created may not have its subrole
+                // yet, so it is read every time; a failed read keeps the last.
+                let is_standard = match subrole.as_ref().and_then(as_string) {
+                    Some(subrole) => subrole == kAXStandardWindowSubrole,
+                    None => cached.is_some_and(|cached| cached.is_standard),
                 };
                 let origin = position.as_ref().and_then(as_point).unwrap_or_default();
                 let size = size.as_ref().and_then(as_size).unwrap_or_default();
