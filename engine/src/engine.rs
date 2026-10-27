@@ -38,10 +38,6 @@ pub struct Config {
     /// Lets a window alone in its column keep the height it had when first
     /// tiled, top-aligned, instead of filling the screen height.
     pub keep_original_height: bool,
-    /// Whether "Displays have separate Spaces" is on, as it is by default.
-    /// macOS then draws a window only on the display holding most of it, so
-    /// a column may overhang a neighbouring monitor without showing there.
-    pub separate_spaces: bool,
 }
 
 /// Placement for every window of one app.
@@ -80,7 +76,6 @@ impl Default for Config {
             center_focused: CenterFocus::Never,
             app_rules: Vec::new(),
             keep_original_height: false,
-            separate_spaces: true,
         }
     }
 }
@@ -367,8 +362,7 @@ impl Engine {
     pub fn set_config(&mut self, config: Config) -> Result<()> {
         let relayout = config.gap != self.config.gap
             || config.center_focused != self.config.center_focused
-            || config.keep_original_height != self.config.keep_original_height
-            || config.separate_spaces != self.config.separate_spaces;
+            || config.keep_original_height != self.config.keep_original_height;
         let resnap = relayout || config.animation_duration != self.config.animation_duration;
         let rules_changed = config.app_rules != self.config.app_rules;
         self.config = config;
@@ -1085,15 +1079,7 @@ impl Engine {
             let workspace = &self.workspaces[monitor.workspace];
             let scroll = self.animator.shown(monitor.workspace);
             let heights = self.config.keep_original_height.then_some(&self.original_heights);
-            frames.extend(placement::frames(
-                workspace,
-                scroll,
-                monitor.area,
-                self.config.gap,
-                &others,
-                self.config.separate_spaces,
-                heights,
-            ));
+            frames.extend(placement::frames(workspace, scroll, monitor.area, self.config.gap, &others, heights));
         }
         for (index, workspace) in self.workspaces.iter().enumerate() {
             if self.monitors.iter().any(|m| m.workspace == index) {
@@ -1557,15 +1543,13 @@ mod tests {
     }
 
     #[test]
-    fn columns_overhang_a_neighbouring_monitor_only_with_separate_spaces() {
+    fn columns_never_overhang_a_neighbouring_monitor() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 600.0), window(2, 100.0, 600.0)]);
         engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
         engine.sync().unwrap();
         engine.command(Command::FocusLeft).unwrap();
-        // 400 of its 600 points are on this monitor, so macOS shows it here.
-        assert_eq!(backend.frame_of(2).unwrap().x, 616.0);
-        engine.set_config(Config { separate_spaces: false, animation_duration: 0.0, ..Config::default() }).unwrap();
-        // Without separate Spaces it would show on the right monitor too.
+        // Mostly on this monitor, but macOS would still show the rest on the
+        // right one, and move the window there as it slides further.
         assert_eq!(backend.frame_of(2).unwrap().x, SCREEN.x - 600.0 + placement::PEEK);
     }
 
