@@ -692,6 +692,9 @@ impl Engine {
                     *id = new;
                 }
             }
+            if let Some(height) = self.original_heights.get(&old).copied() {
+                self.original_heights.entry(new).or_insert(height);
+            }
             self.applier.forget(old);
         }
     }
@@ -731,11 +734,13 @@ impl Engine {
             }
             Command::Expel => {
                 let changed = ws.expel();
-                let source = &ws.columns()[ws.focused_column().saturating_sub(1)];
                 // The expelled window was the tab in front; bring up the one now active.
-                if changed && source.is_tabbed() {
-                    raise.push(source.focused_window());
-                    raise.extend(ws.focused_window());
+                if changed {
+                    let source = &ws.columns()[ws.focused_column().saturating_sub(1)];
+                    if source.is_tabbed() {
+                        raise.push(source.focused_window());
+                        raise.extend(ws.focused_window());
+                    }
                 }
                 changed
             }
@@ -817,7 +822,11 @@ impl Engine {
     /// whether any strip is still sliding.
     pub fn tick(&mut self, seconds: f64) -> Result<bool> {
         if self.animator.advance(seconds, self.config.animation_duration) {
-            self.write_frames()?;
+            if let Err(error) = self.write_frames() {
+                // Stop sliding, or drops and moved windows stay ignored until a write succeeds.
+                self.snap_all();
+                return Err(error);
+            }
         }
         Ok(self.is_animating())
     }
@@ -2153,6 +2162,26 @@ mod tests {
         assert_eq!(engine.sync(), Err(BackendError::NotTrusted));
     }
 
+    #[test]
+    fn expel_on_an_empty_workspace_does_nothing() {
+        let (mut engine, _backend) = engine_with(vec![]);
+        engine.sync().unwrap();
+        assert_eq!(engine.command(Command::Expel), Ok(false));
+    }
+
+    #[test]
+    fn tab_replacing_a_window_keeps_its_original_height() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.set_config(Config { keep_original_height: true, animation_duration: 0.0, ..Config::default() }).unwrap();
+        engine.sync().unwrap();
+        assert_eq!(backend.frame_of(1).unwrap().height, 300.0);
+        backend.add_tab(1, 2);
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![2]]);
+        assert_eq!(backend.frame_of(2).unwrap().height, 300.0);
+    }
+
     fn sliding_engine() -> (Engine, Rc<MockBackend>) {
         let (mut engine, backend) =
             engine_with(vec![window(1, 0.0, 600.0), window(2, 100.0, 600.0), window(3, 200.0, 600.0)]);
@@ -2176,6 +2205,15 @@ mod tests {
         assert_eq!(backend.frame_of(1).unwrap().width, 600.0);
         assert_eq!(engine.tick(0.1), Ok(false));
         assert_eq!(backend.frame_of(1).unwrap().x, 8.0);
+    }
+
+    #[test]
+    fn slide_stops_when_windows_cannot_be_moved() {
+        let (mut engine, backend) = sliding_engine();
+        engine.command(Command::FocusFirst).unwrap();
+        backend.set_trusted(false);
+        assert_eq!(engine.tick(0.1), Err(BackendError::NotTrusted));
+        assert!(!engine.is_animating());
     }
 
     #[test]

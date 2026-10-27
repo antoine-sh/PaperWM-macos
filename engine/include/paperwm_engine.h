@@ -107,7 +107,7 @@ PwmWindowList pwm_engine_list_windows(const PwmEngine *engine);
 void pwm_window_list_free(PwmWindowList list);
 
 // What went wrong in the latest call that failed, for logs. Valid until the
-// next failing call.
+// next failing call. A panic in the engine fails the call with PLATFORM_ERROR.
 const char *pwm_last_error(void);
 
 // Usable area of each monitor (Accessibility coordinates), main one first.
@@ -139,7 +139,8 @@ bool pwm_engine_is_animating(const PwmEngine *engine);
 // Missing fields keep their defaults; malformed JSON returns INVALID_ARGUMENT.
 PwmStatus pwm_engine_set_config(PwmEngine *engine, const char *json);
 
-// Layout snapshot as JSON (engine::State). Free with pwm_string_free.
+// Layout snapshot as JSON (engine::State), or null on failure. Free with
+// pwm_string_free.
 char *pwm_engine_state_json(const PwmEngine *engine);
 void pwm_string_free(char *string);
 

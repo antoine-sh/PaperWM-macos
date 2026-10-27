@@ -11,7 +11,7 @@ pub struct MockBackend {
     focused: Cell<Option<WindowId>>,
     set_frame_calls: Cell<usize>,
     focus_queries: Cell<usize>,
-    trusted: bool,
+    trusted: Cell<bool>,
     /// Like macOS, `focus` returns before focus has actually moved.
     focus_is_async: Cell<bool>,
     /// Apps whose windows `windows` leaves out, as if they were busy.
@@ -25,11 +25,16 @@ pub struct MockBackend {
 
 impl MockBackend {
     pub fn new(windows: Vec<WindowInfo>) -> Self {
-        Self { windows: RefCell::new(windows), trusted: true, ..Self::default() }
+        Self { windows: RefCell::new(windows), trusted: Cell::new(true), ..Self::default() }
     }
 
     pub fn untrusted() -> Self {
         Self::default()
+    }
+
+    /// Grants or revokes Accessibility, as the user can at any time in System Settings.
+    pub fn set_trusted(&self, trusted: bool) {
+        self.trusted.set(trusted);
     }
 
     /// A standard, visible window with the given id and frame.
@@ -134,11 +139,11 @@ impl MockBackend {
 
 impl WindowBackend for MockBackend {
     fn is_trusted(&self) -> bool {
-        self.trusted
+        self.trusted.get()
     }
 
     fn windows(&self) -> Result<Vec<WindowInfo>> {
-        if !self.trusted {
+        if !self.trusted.get() {
             return Err(BackendError::NotTrusted);
         }
         let busy = self.unresponsive.borrow();
@@ -154,7 +159,7 @@ impl WindowBackend for MockBackend {
     }
 
     fn set_frame(&self, id: WindowId, frame: Rect) -> Result<()> {
-        if !self.trusted {
+        if !self.trusted.get() {
             return Err(BackendError::NotTrusted);
         }
         self.set_frame_calls.set(self.set_frame_calls.get() + 1);

@@ -41,8 +41,9 @@ final class WindowManager {
                               name: NSWorkspace.didLaunchApplicationNotification, object: nil)
         workspace.addObserver(self, selector: #selector(appTerminated(_:)),
                               name: NSWorkspace.didTerminateApplicationNotification, object: nil)
-        for name in [NSWorkspace.didActivateApplicationNotification, NSWorkspace.activeSpaceDidChangeNotification,
-                     NSWorkspace.didUnhideApplicationNotification] {
+        workspace.addObserver(self, selector: #selector(appActivated(_:)),
+                              name: NSWorkspace.didActivateApplicationNotification, object: nil)
+        for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didUnhideApplicationNotification] {
             workspace.addObserver(self, selector: #selector(somethingChanged(_:)), name: name, object: nil)
         }
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged(_:)),
@@ -102,7 +103,7 @@ final class WindowManager {
             minimap.hide()
             switcher.step(forward: forward, state: state)
             // A quick tap that is already over switches straight away.
-            if !ModifierWatcher.superHeld { superReleased() }
+            if !modifiers.superHeld { superReleased() }
         case .toggle(let setting):
             settings.values[keyPath: setting].toggle()
         }
@@ -126,6 +127,9 @@ final class WindowManager {
         if shortcuts != appliedShortcuts {
             appliedShortcuts = shortcuts
             if !hotKeysPaused { hotKeys.register(settings.hotKeys) }
+            if let binding = settings.hotKeys.first(where: { $0.id == "switcher" }) {
+                modifiers.watch(carbonModifiers: binding.combo.modifiers)
+            }
         }
         decorations.apply(settings.values)
     }
@@ -255,6 +259,16 @@ final class WindowManager {
     @objc private func appTerminated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
         engine.forgetApp(app.processIdentifier)
+        scheduleSync()
+    }
+
+    @objc private func appActivated(_ notification: Notification) {
+        // Apps busy when observed at launch or Re-tile get another chance
+        // each time they come forward; observing again is a no-op once it has worked.
+        if let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+           app.activationPolicy == .regular {
+            engine.observeApp(app.processIdentifier)
+        }
         scheduleSync()
     }
 

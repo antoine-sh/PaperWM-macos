@@ -5,6 +5,7 @@
 
 use std::cell::RefCell;
 use std::ffi::{c_char, c_void, CStr, CString};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 
 use crate::backend::{BackendError, WindowInfo};
@@ -120,7 +121,7 @@ pub unsafe extern "C" fn pwm_engine_list_windows(engine: *const Engine) -> PwmWi
     let Some(engine) = engine.as_ref() else {
         return PwmWindowList::empty(PwmStatus::NullPointer);
     };
-    match engine.windows() {
+    match guarded(|| engine.windows()) {
         Ok(windows) => {
             let boxed: Box<[PwmWindow]> = windows.iter().map(to_ffi).collect();
             let len = boxed.len();
@@ -159,6 +160,15 @@ fn status(result: crate::backend::Result<impl Sized>) -> PwmStatus {
     }
 }
 
+/// Runs `f`, turning a panic into an error: unwinding out of an `extern "C"`
+/// function aborts the whole app.
+fn guarded<T>(f: impl FnOnce() -> crate::backend::Result<T>) -> crate::backend::Result<T> {
+    catch_unwind(AssertUnwindSafe(f)).unwrap_or_else(|panic| {
+        let message = panic.downcast_ref::<&str>().copied().or(panic.downcast_ref::<String>().map(String::as_str));
+        Err(BackendError::Platform(format!("engine panicked: {}", message.unwrap_or("unknown cause"))))
+    })
+}
+
 /// What went wrong in the latest call that failed, for logs. Valid until the
 /// next failing call.
 #[no_mangle]
@@ -179,7 +189,8 @@ pub unsafe extern "C" fn pwm_engine_set_monitors(engine: *mut Engine, areas: *co
     if areas.is_null() || count == 0 {
         return PwmStatus::InvalidArgument;
     }
-    status(engine.set_monitors(std::slice::from_raw_parts(areas, count)))
+    let areas = std::slice::from_raw_parts(areas, count);
+    status(guarded(|| engine.set_monitors(areas)))
 }
 
 /// Brings the layout up to date with the current windows and focus.
@@ -191,7 +202,7 @@ pub unsafe extern "C" fn pwm_engine_sync(engine: *mut Engine) -> PwmStatus {
     let Some(engine) = engine.as_mut() else {
         return PwmStatus::NullPointer;
     };
-    status(engine.sync())
+    status(guarded(|| engine.sync()))
 }
 
 /// Syncs after a drag ended with the pointer at `x`, `y` (Accessibility
@@ -204,7 +215,7 @@ pub unsafe extern "C" fn pwm_engine_drop(engine: *mut Engine, x: f64, y: f64) ->
     let Some(engine) = engine.as_mut() else {
         return PwmStatus::NullPointer;
     };
-    status(engine.drop_at(x, y))
+    status(guarded(|| engine.drop_at(x, y)))
 }
 
 /// Runs one of the `PWM_COMMAND_*` actions. `arg` is the workspace index,
@@ -230,7 +241,7 @@ pub unsafe extern "C" fn pwm_engine_command(
     let Some(command) = Command::parse(command, arg) else {
         return PwmStatus::InvalidArgument;
     };
-    let result = engine.command(command);
+    let result = guarded(|| engine.command(command));
     if let (Ok(true), Some(changed)) = (&result, changed.as_mut()) {
         *changed = true;
     }
@@ -253,7 +264,7 @@ pub unsafe extern "C" fn pwm_engine_tick(engine: *mut Engine, seconds: f64, stat
         }
         return false;
     };
-    let result = engine.tick(seconds);
+    let result = guarded(|| engine.tick(seconds));
     let sliding = *result.as_ref().unwrap_or(&false);
     if let Some(out) = status_out.as_mut() {
         *out = status(result);
@@ -288,10 +299,11 @@ pub unsafe extern "C" fn pwm_engine_set_config(engine: *mut Engine, json: *const
     let Some(config) = CStr::from_ptr(json).to_str().ok().and_then(Config::from_json) else {
         return PwmStatus::InvalidArgument;
     };
-    status(engine.set_config(config))
+    status(guarded(|| engine.set_config(config)))
 }
 
-/// The layout as JSON (see `engine::State`), or null for a null engine.
+/// The layout as JSON (see `engine::State`), or null for a null engine or a
+/// failure, which `pwm_last_error` describes.
 /// Free with `pwm_string_free`.
 ///
 /// # Safety
@@ -301,7 +313,10 @@ pub unsafe extern "C" fn pwm_engine_state_json(engine: *const Engine) -> *mut c_
     let Some(engine) = engine.as_ref() else {
         return ptr::null_mut();
     };
-    c_string(&serde_json::to_string(&engine.state()).unwrap_or_default())
+    let result = guarded(|| Ok(serde_json::to_string(&engine.state()).unwrap_or_default()));
+    let json = result.as_ref().map_or(ptr::null_mut(), |json| c_string(json));
+    status(result);
+    json
 }
 
 /// # Safety
@@ -318,7 +333,10 @@ pub unsafe extern "C" fn pwm_string_free(string: *mut c_char) {
 #[no_mangle]
 pub unsafe extern "C" fn pwm_engine_observe_app(engine: *const Engine, pid: i32) {
     if let Some(engine) = engine.as_ref() {
-        engine.observe_app(pid);
+        status(guarded(|| {
+            engine.observe_app(pid);
+            Ok(())
+        }));
     }
 }
 
@@ -327,7 +345,10 @@ pub unsafe extern "C" fn pwm_engine_observe_app(engine: *const Engine, pid: i32)
 #[no_mangle]
 pub unsafe extern "C" fn pwm_engine_forget_app(engine: *const Engine, pid: i32) {
     if let Some(engine) = engine.as_ref() {
-        engine.forget_app(pid);
+        status(guarded(|| {
+            engine.forget_app(pid);
+            Ok(())
+        }));
     }
 }
 
@@ -396,6 +417,13 @@ mod tests {
             assert!(!pwm_engine_is_animating(ptr::null()));
             pwm_engine_free(ptr::null_mut());
         }
+    }
+
+    #[test]
+    fn panics_are_reported_as_platform_errors() {
+        assert_eq!(status(guarded(|| -> crate::backend::Result<()> { panic!("boom") })), PwmStatus::PlatformError);
+        let message = unsafe { CStr::from_ptr(pwm_last_error()) }.to_str().unwrap();
+        assert_eq!(message, "engine panicked: boom");
     }
 
     #[test]
