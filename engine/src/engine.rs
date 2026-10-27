@@ -2400,6 +2400,19 @@ mod tests {
     }
 
     #[test]
+    fn strip_comes_back_where_it_was_after_the_screen_narrows_for_a_moment() {
+        let (mut engine, backend) = engine_with((1..=5).map(|id| window(id, 500.0 * id as f64, 400.0)).collect());
+        engine.sync().unwrap();
+        engine.command(Command::FocusFirst).unwrap();
+        engine.command(Command::FocusRight).unwrap();
+        let before = backend.frame_of(2);
+        // macOS may report a smaller screen for a moment while waking from sleep.
+        engine.set_monitors(&[Rect { width: 516.0, ..SCREEN }]).unwrap();
+        engine.set_monitors(&[SCREEN]).unwrap();
+        assert_eq!(backend.frame_of(2), before);
+    }
+
+    #[test]
     fn pin_commands_keep_a_column_at_the_screen_edge() {
         let (mut engine, backend) =
             engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0), window(3, 800.0, 300.0)]);

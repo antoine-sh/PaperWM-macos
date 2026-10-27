@@ -85,6 +85,12 @@ pub struct Workspace {
     /// Whether `scroll` was set by centering, which the minimal scrolling
     /// of `ensure_focused_visible` must not undo.
     centered: bool,
+    /// Viewport width the strip was last laid out for.
+    viewport: f64,
+    /// Viewport width and scroll from before the viewport last changed, put
+    /// back if it changes back: a screen that narrows for a moment, as
+    /// while the Mac wakes, would otherwise leave the strip shifted.
+    previous: Option<(f64, f64)>,
 }
 
 /// When the strip scrolls to keep the focused column centred rather than
@@ -491,6 +497,14 @@ impl Workspace {
 
     /// Brings the focused column into view the way `mode` asks.
     pub fn follow_focus(&mut self, mode: CenterFocus, viewport: f64, gap: f64) {
+        if viewport != self.viewport {
+            let back = self.previous.filter(|&(width, _)| width == viewport);
+            self.previous = Some((self.viewport, self.scroll));
+            self.viewport = viewport;
+            if let Some((_, scroll)) = back {
+                self.scroll = scroll;
+            }
+        }
         self.fit_pins(viewport, gap);
         let center = match mode {
             CenterFocus::Never => false,
