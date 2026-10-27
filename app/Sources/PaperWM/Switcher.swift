@@ -1,8 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// PaperWM's Super+Tab: hold ⌃⌥, press Tab to step through windows in most
-/// recently used order, let go to focus the selection.
+/// PaperWM's Super+Tab: hold ⌃⌥ (or the modifiers of the rebound shortcut),
+/// press Tab to step through windows in most recently used order, let go to
+/// focus the selection.
 @MainActor
 final class Switcher {
     private let panel: NSPanel

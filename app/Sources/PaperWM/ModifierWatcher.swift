@@ -1,11 +1,16 @@
 import AppKit
+import Carbon.HIToolbox
 
-/// Reports when the user lets go of ⌃⌥ (PaperWM's Super), wherever focus is.
+/// Reports when the user lets go of the switcher's modifiers (⌃⌥, PaperWM's
+/// Super, unless rebound), wherever focus is.
 @MainActor
 final class ModifierWatcher {
     private let onRelease: () -> Void
     private var monitors: [Any] = []
     private var held = false
+    /// The modifiers held while switching. Empty when the shortcut has none
+    /// but ⇧, so each press switches straight away.
+    private var required: NSEvent.ModifierFlags = [.control, .option]
 
     init(onRelease: @escaping () -> Void) {
         self.onRelease = onRelease
@@ -27,13 +32,27 @@ final class ModifierWatcher {
         }
     }
 
-    /// Whether ⌃ and ⌥ are both down right now.
-    static var superHeld: Bool {
-        NSEvent.modifierFlags.isSuperset(of: [.control, .option])
+    /// Watches the modifiers of the switcher shortcut, a Carbon mask, less ⇧,
+    /// which only picks the backwards variant.
+    func watch(carbonModifiers modifiers: Int) {
+        var flags: NSEvent.ModifierFlags = []
+        if modifiers & controlKey != 0 { flags.insert(.control) }
+        if modifiers & optionKey != 0 { flags.insert(.option) }
+        if modifiers & cmdKey != 0 { flags.insert(.command) }
+        required = flags
+    }
+
+    /// Whether the switcher's modifiers are all down right now.
+    var superHeld: Bool {
+        isHeld(NSEvent.modifierFlags)
+    }
+
+    private func isHeld(_ flags: NSEvent.ModifierFlags) -> Bool {
+        !required.isEmpty && flags.isSuperset(of: required)
     }
 
     private func update(_ flags: NSEvent.ModifierFlags) {
-        let now = flags.isSuperset(of: [.control, .option])
+        let now = isHeld(flags)
         if held && !now { onRelease() }
         held = now
     }
