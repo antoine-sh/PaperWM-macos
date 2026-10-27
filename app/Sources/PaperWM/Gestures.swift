@@ -1,9 +1,10 @@
 import AppKit
 import CPaperWMEngine
 
-/// Trackpad navigation: with ⌃⌥ held, two-finger horizontal scrolling pans
-/// the strip and vertical scrolling switches workspaces. macOS keeps
-/// three-finger swipes to itself, so this stands in for PaperWM's.
+/// Trackpad navigation: with Super held (⌃⌥, or the switcher shortcut's
+/// modifiers), two-finger horizontal scrolling pans the strip and vertical
+/// scrolling switches workspaces. macOS keeps three-finger swipes to itself,
+/// so this stands in for PaperWM's.
 @MainActor
 final class Gestures {
     /// Vertical travel, in points, that switches workspace.
@@ -17,6 +18,8 @@ final class Gestures {
     private var vertical = 0.0
     private var switched = false
     private var endTimer: Timer?
+    /// Modifiers that must be held, kept until the tap exists.
+    private var required: NSEvent.ModifierFlags = [.control, .option]
 
     init(perform: @escaping (Action) -> Void) {
         self.perform = perform
@@ -28,10 +31,18 @@ final class Gestures {
         tap = ScrollTap { [weak self] dx, dy in
             MainActor.assumeIsolated { self?.handle(dx: dx, dy: dy) }
         }
+        tap?.setRequired(required)
         if tap?.start() != true {
             tap = nil
             NSLog("PaperWM: could not install the trackpad event tap")
         }
+    }
+
+    /// Pans only while the modifiers of the Carbon mask `modifiers`, less ⇧,
+    /// are held; with none left, scrolling is never taken over.
+    func watch(carbonModifiers modifiers: Int) {
+        required = ModifierWatcher.superFlags(carbonModifiers: modifiers)
+        tap?.setRequired(required)
     }
 
     /// Handles the scrolling gathered since the last call.
@@ -83,6 +94,8 @@ private final class ScrollTap: @unchecked Sendable {
     private var dx = 0.0
     private var dy = 0.0
     private var deliveryScheduled = false
+    /// Guarded by `lock`: the main thread sets it, the tap thread reads it.
+    private var required: CGEventFlags = [.maskControl, .maskAlternate]
     /// Set once in `start`, before the tap thread runs.
     private var port: CFMachPort?
 
@@ -121,9 +134,13 @@ private final class ScrollTap: @unchecked Sendable {
             if let port { CGEvent.tapEnable(tap: port, enable: true) }
             return false
         }
-        guard type == .scrollWheel, event.flags.contains([.maskControl, .maskAlternate]) else { return false }
+        guard type == .scrollWheel else { return false }
 
         lock.lock()
+        guard !required.isEmpty, event.flags.contains(required) else {
+            lock.unlock()
+            return false
+        }
         dx += event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2)
         dy += event.getDoubleValueField(.scrollWheelEventPointDeltaAxis1)
         let schedule = !deliveryScheduled
@@ -133,6 +150,14 @@ private final class ScrollTap: @unchecked Sendable {
             DispatchQueue.main.async { self.flush() }
         }
         return true
+    }
+
+    func setRequired(_ flags: NSEvent.ModifierFlags) {
+        // Device-independent modifier bits are the same in both types.
+        let required = CGEventFlags(rawValue: UInt64(flags.rawValue))
+        lock.lock()
+        self.required = required
+        lock.unlock()
     }
 
     /// Runs on the main thread: hands over everything gathered so far.

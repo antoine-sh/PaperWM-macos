@@ -35,11 +35,16 @@ final class ModifierWatcher {
     /// Watches the modifiers of the switcher shortcut, a Carbon mask, less ⇧,
     /// which only picks the backwards variant.
     func watch(carbonModifiers modifiers: Int) {
+        required = Self.superFlags(carbonModifiers: modifiers)
+    }
+
+    /// The modifiers of a Carbon mask that make up Super: all but ⇧.
+    nonisolated static func superFlags(carbonModifiers modifiers: Int) -> NSEvent.ModifierFlags {
         var flags: NSEvent.ModifierFlags = []
         if modifiers & controlKey != 0 { flags.insert(.control) }
         if modifiers & optionKey != 0 { flags.insert(.option) }
         if modifiers & cmdKey != 0 { flags.insert(.command) }
-        required = flags
+        return flags
     }
 
     /// Whether the switcher's modifiers are all down right now.

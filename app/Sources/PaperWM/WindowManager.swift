@@ -129,6 +129,7 @@ final class WindowManager {
             if !hotKeysPaused { hotKeys.register(settings.hotKeys) }
             if let binding = settings.hotKeys.first(where: { $0.id == "switcher" }) {
                 modifiers.watch(carbonModifiers: binding.combo.modifiers)
+                gestures.watch(carbonModifiers: binding.combo.modifiers)
             }
         }
         decorations.apply(settings.values)
