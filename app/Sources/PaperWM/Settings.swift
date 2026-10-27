@@ -1,5 +1,5 @@
 import CPaperWMEngine
-import Foundation
+import AppKit
 
 enum MinimapStyle: String, Codable {
     /// The strip with each window as a box, in the middle of the screen.
@@ -145,6 +145,7 @@ final class Settings: ObservableObject {
             let centerFocused: CenterFocus
             let appRules: [Rule]
             let keepOriginalHeight: Bool
+            let separateSpaces: Bool
         }
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
@@ -154,7 +155,8 @@ final class Settings: ObservableObject {
         let config = Config(gap: values.gap, widthPresets: values.widthPresets, widthStep: values.widthStep,
                             heightStep: values.heightStep, workspaceNames: values.workspaceNames,
                             animationDuration: values.animationDuration, centerFocused: values.centerFocused,
-                            appRules: rules, keepOriginalHeight: values.keepOriginalHeight)
+                            appRules: rules, keepOriginalHeight: values.keepOriginalHeight,
+                            separateSpaces: NSScreen.screensHaveSeparateSpaces)
         return (try? encoder.encode(config)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"
     }
 
