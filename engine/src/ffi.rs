@@ -282,6 +282,16 @@ pub unsafe extern "C" fn pwm_engine_is_animating(engine: *const Engine) -> bool 
     engine.as_ref().is_some_and(Engine::is_animating)
 }
 
+/// Whether the last sync met a window still being created, so
+/// `pwm_engine_sync` should be called again shortly.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_is_settling(engine: *const Engine) -> bool {
+    engine.as_ref().is_some_and(Engine::is_settling)
+}
+
 /// Applies settings given as JSON (see `engine::Config`). Malformed JSON
 /// leaves the current settings in place.
 ///
@@ -415,6 +425,7 @@ mod tests {
             assert!(!pwm_engine_tick(ptr::null_mut(), 0.1, &mut status));
             assert_eq!(status, PwmStatus::NullPointer);
             assert!(!pwm_engine_is_animating(ptr::null()));
+            assert!(!pwm_engine_is_settling(ptr::null()));
             pwm_engine_free(ptr::null_mut());
         }
     }

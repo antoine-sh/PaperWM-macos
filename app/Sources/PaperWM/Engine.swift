@@ -122,6 +122,10 @@ final class Engine {
     /// Whether a strip is sliding, so `tick` should run every frame.
     var isAnimating: Bool { pwm_engine_is_animating(handle) }
 
+    /// Whether the last sync met a window still being created, so another
+    /// sync should follow shortly.
+    var isSettling: Bool { pwm_engine_is_settling(handle) }
+
     private static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase

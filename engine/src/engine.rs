@@ -814,6 +814,12 @@ impl Engine {
 
     /// Advances strip slides by `seconds` and moves the windows. Returns
     /// whether any strip is still sliding.
+    /// Whether the last sync met a window still being created, so the
+    /// caller should sync again shortly: macOS does not say when it is done.
+    pub fn is_settling(&self) -> bool {
+        self.backend.settling()
+    }
+
     pub fn tick(&mut self, seconds: f64) -> Result<bool> {
         if self.animator.advance(seconds, self.config.animation_duration) {
             if let Err(error) = self.write_frames() {
@@ -1135,6 +1141,9 @@ mod tests {
         fn skipped_apps(&self) -> Vec<i32> {
             self.0.skipped_apps()
         }
+        fn settling(&self) -> bool {
+            self.0.settling()
+        }
         fn focused_window(&self) -> Option<WindowId> {
             self.0.focused_window()
         }
@@ -1193,13 +1202,18 @@ mod tests {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
         engine.sync().unwrap();
         // macOS reports a window being created without its subrole for a moment.
+        // and says nothing once it has one, so the caller is asked to sync again.
         backend.add(WindowInfo { is_standard: false, ..window(2, 400.0, 300.0) });
+        backend.set_settling(true);
         engine.sync().unwrap();
         assert_eq!(columns(&engine), vec![vec![1]]);
+        assert!(engine.is_settling());
 
         backend.update(2, |w| w.is_standard = true);
+        backend.set_settling(false);
         engine.sync().unwrap();
         assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+        assert!(!engine.is_settling());
     }
 
     #[test]

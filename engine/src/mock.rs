@@ -19,6 +19,8 @@ pub struct MockBackend {
     /// Background tabs. Like macOS, a tab group is the windows of one app
     /// sharing a frame, of which only the shown one is on screen.
     hidden_tabs: RefCell<Vec<WindowId>>,
+    /// What `settling` reports.
+    settling: Cell<bool>,
     /// Every window `focus` raised, oldest first; the last is frontmost.
     raised: RefCell<Vec<WindowId>>,
 }
@@ -51,6 +53,11 @@ impl MockBackend {
             is_fullscreen: false,
             tabs: Vec::new(),
         }
+    }
+
+    /// Sets whether `windows` met a window that is still being created.
+    pub fn set_settling(&self, settling: bool) {
+        self.settling.set(settling);
     }
 
     pub fn add(&self, window: WindowInfo) {
@@ -156,6 +163,10 @@ impl WindowBackend for MockBackend {
 
     fn skipped_apps(&self) -> Vec<i32> {
         self.unresponsive.borrow().clone()
+    }
+
+    fn settling(&self) -> bool {
+        self.settling.get()
     }
 
     fn set_frame(&self, id: WindowId, frame: Rect) -> Result<()> {

@@ -76,6 +76,13 @@ pub trait WindowBackend {
         Vec::new()
     }
 
+    /// Whether the last [`windows`](Self::windows) call met a new window
+    /// that may still become tileable, not yet on screen or without its
+    /// subrole. Nothing notifies when that settles, so sync again shortly.
+    fn settling(&self) -> bool {
+        false
+    }
+
     /// Makes the next [`windows`](Self::windows) call read every app.
     fn invalidate(&self) {}
 
