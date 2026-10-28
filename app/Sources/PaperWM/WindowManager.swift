@@ -22,6 +22,8 @@ final class WindowManager {
     private lazy var modifiers = ModifierWatcher { [weak self] in self?.superReleased() }
     private lazy var drags = DragWatcher { [weak self] point in self?.dropped(at: point) }
     private var syncScheduled = false
+    /// Whether a sync is due because the last one met a window still being created.
+    private var settleScheduled = false
     /// A sync asked for during a slide or a drag, run when it ends.
     private var syncDeferred = false
     private var hotKeysPaused = false
@@ -138,6 +140,7 @@ final class WindowManager {
     @discardableResult
     private func publish() -> EngineState? {
         animate()
+        settle()
         guard let state = engine.state() else {
             decorations.refresh(focus: nil)
             return nil
@@ -146,6 +149,19 @@ final class WindowManager {
         tabBars.update(state)
         onStateChange?(state)
         return state
+    }
+
+    /// Syncs again shortly while a new window is still being created:
+    /// macOS sends nothing once it is on screen and tileable.
+    private func settle() {
+        guard !settleScheduled, engine.isSettling else { return }
+        settleScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            MainActor.assumeIsolated {
+                self?.settleScheduled = false
+                self?.scheduleSync()
+            }
+        }
     }
 
     /// Ticks the engine every frame until the strips stop sliding.

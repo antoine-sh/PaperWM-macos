@@ -132,6 +132,10 @@ bool pwm_engine_tick(PwmEngine *engine, double seconds, PwmStatus *status);
 // Whether a strip is sliding, so pwm_engine_tick should run every frame.
 bool pwm_engine_is_animating(const PwmEngine *engine);
 
+// Whether the last sync met a window still being created, so pwm_engine_sync
+// should be called again shortly.
+bool pwm_engine_is_settling(const PwmEngine *engine);
+
 // Settings as JSON: {"gap": 8, "width_presets": [0.33, 0.5], "workspace_names": ["1", ...],
 // "animation_duration": 0.25, "center_focused": "never" | "on_overflow" | "always",
 // "app_rules": [{"app": "Calculator", "action": "float"},

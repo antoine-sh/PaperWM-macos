@@ -1,6 +1,6 @@
 //! [`WindowBackend`] implementation for macOS.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::time::{Duration, Instant};
 
@@ -15,6 +15,7 @@ use super::observer::{AppObserver, HandlerSlot};
 use super::window_list;
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
 use crate::geometry::{Point, Rect, Size};
+use crate::settle::Settling;
 
 /// A failed call that took at least this long ran into the messaging
 /// timeout, so the app is busy rather than refusing the request.
@@ -62,6 +63,10 @@ pub struct AxBackend {
     /// Each app's on-screen windows when its windows were last read. An app
     /// whose set is unchanged and that sent no notification is not read again.
     seen: RefCell<HashMap<i32, BTreeSet<WindowId>>>,
+    /// New windows read before they were on screen or had their subrole.
+    settling: RefCell<Settling>,
+    /// Whether the last `windows()` call met one.
+    is_settling: Cell<bool>,
     /// Application elements, kept between calls.
     apps: RefCell<HashMap<i32, AxElement>>,
     /// Declared before `handler` so observers are torn down first.
@@ -177,6 +182,8 @@ impl WindowBackend for AxBackend {
         let mut elements = HashMap::new();
         let mut windows = Vec::new();
         let mut skipped = Vec::new();
+        // Each window listed, with its app and whether it may still be being created.
+        let mut listed = Vec::new();
         // Known windows of read apps that left the screen. They are reported
         // only if the user turns out to be on a fullscreen window's Space.
         let mut away: Vec<(WindowInfo, AxElement)> = Vec::new();
@@ -247,11 +254,19 @@ impl WindowBackend for AxBackend {
                     is_fullscreen,
                     tabs: Vec::new(),
                 };
+                let is_minimized = minimized.as_ref().and_then(as_bool).unwrap_or(false);
+                // Off screen, or on screen with no subrole yet; a definite
+                // other subrole is a dialog or popup, not a window being made.
+                let unsettled = match on_screen.get(&id) {
+                    Some(_) => !is_standard && subrole.as_ref().and_then(as_string).is_none_or(|s| s.is_empty()),
+                    None => !is_minimized && !is_fullscreen,
+                };
+                listed.push((id, pid, unsettled));
                 // Background tabs and windows on other Spaces are neither on
                 // screen nor minimized, unless on their own fullscreen Space.
                 let z_order = match on_screen.get(&id) {
                     Some(w) => w.z_order,
-                    None if minimized.as_ref().and_then(as_bool).unwrap_or(false) => {
+                    None if is_minimized => {
                         info.is_minimized = true;
                         usize::MAX
                     }
@@ -333,8 +348,11 @@ impl WindowBackend for AxBackend {
                 elements.entry(id).or_insert(cached);
             }
         }
+        // Apps with a window still being created are read again next time.
+        let settling = self.settling.borrow_mut().update(&listed, &skipped, Instant::now());
+        self.is_settling.set(!settling.is_empty());
         // Forget apps that left the screen, so they are read when they return.
-        seen.retain(|pid, _| present.contains(pid));
+        seen.retain(|pid, _| present.contains(pid) && !settling.contains(pid));
         for observer in observers.values_mut() {
             observer.retain_windows(|id| elements.contains_key(&id));
         }
@@ -347,6 +365,10 @@ impl WindowBackend for AxBackend {
 
     fn skipped_apps(&self) -> Vec<i32> {
         self.skipped.borrow().clone()
+    }
+
+    fn settling(&self) -> bool {
+        self.is_settling.get()
     }
 
     fn invalidate(&self) {
