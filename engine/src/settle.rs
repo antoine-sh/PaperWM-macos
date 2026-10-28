@@ -18,8 +18,8 @@ pub struct Settling {
     /// Every window listed by the last read, with its app, so only windows
     /// never listed before count as new.
     known: HashMap<WindowId, i32>,
-    /// New windows not yet tileable, with their app and when first listed.
-    since: HashMap<WindowId, (i32, Instant)>,
+    /// New windows not yet tileable, and when they were first listed.
+    since: HashMap<WindowId, Instant>,
 }
 
 impl Settling {
@@ -33,25 +33,21 @@ impl Settling {
         for &(id, pid, unsettled) in listed {
             known.insert(id, pid);
             let first = match self.since.get(&id) {
-                Some(&(_, first)) => first,
+                Some(&first) => first,
                 None if !self.known.contains_key(&id) => now,
                 None => continue,
             };
             if unsettled && now.duration_since(first) < SETTLE_TIME {
-                since.insert(id, (pid, first));
+                since.insert(id, first);
                 if !apps.contains(&pid) {
                     apps.push(pid);
                 }
             }
         }
-        for (&id, &pid) in &self.known {
-            if skipped.contains(&pid) {
-                known.entry(id).or_insert(pid);
-            }
-        }
-        for (&id, &entry) in &self.since {
-            if skipped.contains(&entry.0) {
-                since.entry(id).or_insert(entry);
+        for (&id, &pid) in self.known.iter().filter(|(_, pid)| skipped.contains(pid)) {
+            known.entry(id).or_insert(pid);
+            if let Some(&first) = self.since.get(&id) {
+                since.entry(id).or_insert(first);
             }
         }
         self.known = known;
