@@ -30,6 +30,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         if Engine.isTrusted() {
             startManager()
+            onboarding.resumeIfInterrupted()
         } else {
             // A first launch, or a rebuild that lost the permission: the guide explains and asks for it.
             onboarding.show()

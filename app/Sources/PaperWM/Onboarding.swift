@@ -115,6 +115,8 @@ struct OnboardingView: View {
             hint: "Turn on PaperWM in Privacy & Security › Screen Recording. macOS may ask you to quit and "
                 + "reopen PaperWM.",
             grant: {
+                // Granting makes macOS offer to quit and reopen PaperWM; pick the guide up here on relaunch.
+                UserDefaults.standard.set(true, forKey: OnboardingWindowController.resumeKey)
                 if !Thumbnails.askForAccessOnce() { OnboardingView.openPrivacySettings("Privacy_ScreenCapture") }
             }
         )
@@ -206,6 +208,15 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     private var window: NSWindow?
     private var timer: Timer?
     private let model = OnboardingModel()
+    /// Set while the guide waits on Screen Recording, which may need a relaunch.
+    /// Quitting doesn't close windows, so only closing the guide clears it.
+    nonisolated static let resumeKey = "resumeOnboardingAtScreenRecording"
+
+    /// Reopens the guide at Screen Recording if the last run quit while on it.
+    func resumeIfInterrupted() {
+        guard UserDefaults.standard.bool(forKey: Self.resumeKey) else { return }
+        show(at: .screenRecording)
+    }
 
     /// Without `step`, an open guide stays where it is and a closed one starts over.
     func show(at step: OnboardingModel.Step? = nil) {
@@ -235,6 +246,7 @@ final class OnboardingWindowController: NSObject, NSWindowDelegate {
     }
 
     func windowWillClose(_ notification: Notification) {
+        UserDefaults.standard.removeObject(forKey: Self.resumeKey)
         timer?.invalidate()
         timer = nil
     }
