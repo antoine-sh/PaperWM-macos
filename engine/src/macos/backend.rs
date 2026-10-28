@@ -15,15 +15,13 @@ use super::observer::{AppObserver, HandlerSlot};
 use super::window_list;
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
 use crate::geometry::{Point, Rect, Size};
+use crate::settle::Settling;
 
 /// A failed call that took at least this long ran into the messaging
 /// timeout, so the app is busy rather than refusing the request.
 const TIMED_OUT: Duration = Duration::from_millis((ax::MESSAGING_TIMEOUT * 800.0) as u64);
 /// How long to leave a busy app alone before asking it again.
 const BACK_OFF: Duration = Duration::from_secs(2);
-/// How many reads in a row a new window may still look untileable before
-/// it is taken as it is: a background tab, a dialog, a window on another Space.
-const SETTLE_READS: u8 = 8;
 /// Not among `accessibility_sys`'s constants.
 const FULL_SCREEN_ATTRIBUTE: &str = "AXFullScreen";
 /// What `windows()` reads of each window, in one round trip. The minimized
@@ -65,11 +63,10 @@ pub struct AxBackend {
     /// Each app's on-screen windows when its windows were last read. An app
     /// whose set is unchanged and that sent no notification is not read again.
     seen: RefCell<HashMap<i32, BTreeSet<WindowId>>>,
-    /// New windows read before they were on screen or had their subrole,
-    /// with their app and how many reads found them so.
-    unsettled: RefCell<HashMap<WindowId, (i32, u8)>>,
-    /// Whether the last `windows()` call met such a window.
-    settling: Cell<bool>,
+    /// New windows read before they were on screen or had their subrole.
+    settling: RefCell<Settling>,
+    /// Whether the last `windows()` call met one.
+    is_settling: Cell<bool>,
     /// Application elements, kept between calls.
     apps: RefCell<HashMap<i32, AxElement>>,
     /// Declared before `handler` so observers are torn down first.
@@ -181,13 +178,12 @@ impl WindowBackend for AxBackend {
         let everything = self.handler.everything.replace(false);
         let changed = std::mem::take(&mut *self.handler.changed.borrow_mut());
         let mut seen = std::mem::take(&mut *self.seen.borrow_mut());
-        let mut unsettled = std::mem::take(&mut *self.unsettled.borrow_mut());
-        let mut still_unsettled = HashMap::new();
-        let mut settling = false;
         let mut observers = self.observers.borrow_mut();
         let mut elements = HashMap::new();
         let mut windows = Vec::new();
         let mut skipped = Vec::new();
+        // Each window listed, with its app and whether it may still be being created.
+        let mut listed = Vec::new();
         // Known windows of read apps that left the screen. They are reported
         // only if the user turns out to be on a fullscreen window's Space.
         let mut away: Vec<(WindowInfo, AxElement)> = Vec::new();
@@ -222,7 +218,6 @@ impl WindowBackend for AxBackend {
                 }
             };
             let mut complete = true;
-            let mut app_settling = false;
             // Off-screen standard windows, which hide behind the shown tab of
             // their native tab group at the same frame.
             let mut hidden: Vec<(WindowId, Rect)> = Vec::new();
@@ -260,17 +255,13 @@ impl WindowBackend for AxBackend {
                     tabs: Vec::new(),
                 };
                 let is_minimized = minimized.as_ref().and_then(as_bool).unwrap_or(false);
-                // A window caught as it is created may not be on screen or
-                // have its subrole yet, and macOS sends nothing once it does.
-                let looks_unsettled = match on_screen.get(&id) {
-                    Some(_) => !is_standard,
+                // Off screen, or on screen with no subrole yet; a definite
+                // other subrole is a dialog or popup, not a window being made.
+                let unsettled = match on_screen.get(&id) {
+                    Some(_) => !is_standard && subrole.as_ref().and_then(as_string).is_none_or(|s| s.is_empty()),
                     None => !is_minimized && !is_fullscreen,
                 };
-                if looks_unsettled && (cached.is_none() || unsettled.contains_key(&id)) {
-                    let reads = unsettled.get(&id).map_or(1, |&(_, reads)| reads.saturating_add(1));
-                    still_unsettled.insert(id, (pid, reads));
-                    app_settling |= reads <= SETTLE_READS;
-                }
+                listed.push((id, pid, unsettled));
                 // Background tabs and windows on other Spaces are neither on
                 // screen nor minimized, unless on their own fullscreen Space.
                 let z_order = match on_screen.get(&id) {
@@ -320,12 +311,10 @@ impl WindowBackend for AxBackend {
             }
             let tabs: Vec<WindowId> = windows[first..].iter().flat_map(|(_, w)| w.tabs.iter().copied()).collect();
             away.retain(|(w, _)| w.pid != pid || !tabs.contains(&w.id));
-            settling |= app_settling;
-            if !complete {
-                skipped.push(pid);
-            } else if !app_settling {
-                // An app with a settling window is read again next time.
+            if complete {
                 seen.insert(pid, ids);
+            } else {
+                skipped.push(pid);
             }
         }
         // On a fullscreen window's own Space every other window is off
@@ -359,10 +348,11 @@ impl WindowBackend for AxBackend {
                 elements.entry(id).or_insert(cached);
             }
         }
-        unsettled.retain(|_, &mut (pid, _)| skipped.contains(&pid));
-        still_unsettled.extend(unsettled);
+        // Apps with a window still being created are read again next time.
+        let settling = self.settling.borrow_mut().update(&listed, &skipped, Instant::now());
+        self.is_settling.set(!settling.is_empty());
         // Forget apps that left the screen, so they are read when they return.
-        seen.retain(|pid, _| present.contains(pid));
+        seen.retain(|pid, _| present.contains(pid) && !settling.contains(pid));
         for observer in observers.values_mut() {
             observer.retain_windows(|id| elements.contains_key(&id));
         }
@@ -370,8 +360,6 @@ impl WindowBackend for AxBackend {
         *self.elements.borrow_mut() = elements;
         *self.seen.borrow_mut() = seen;
         *self.skipped.borrow_mut() = skipped;
-        *self.unsettled.borrow_mut() = still_unsettled;
-        self.settling.set(settling);
         Ok(windows.into_iter().map(|(_, w)| w).collect())
     }
 
@@ -380,7 +368,7 @@ impl WindowBackend for AxBackend {
     }
 
     fn settling(&self) -> bool {
-        self.settling.get()
+        self.is_settling.get()
     }
 
     fn invalidate(&self) {

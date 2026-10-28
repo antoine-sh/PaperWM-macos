@@ -303,6 +303,8 @@ pub struct Engine {
     /// applies focus changes asynchronously, so until the reported focus
     /// differs from this, it is old news and must not be followed.
     stale_focus: Option<WindowId>,
+    /// What the backend said of the last read; see [`Engine::is_settling`].
+    settling: bool,
     /// The focused window for the UI; see `State::focused_window`.
     system_focus: Option<WindowId>,
     applier: FrameApplier,
@@ -327,6 +329,7 @@ impl Engine {
             scratch_visible: true,
             mru: Vec::new(),
             stale_focus: None,
+            settling: false,
             system_focus: None,
             applier: FrameApplier::default(),
             info: HashMap::new(),
@@ -497,14 +500,15 @@ impl Engine {
     }
 
     fn sync_dropping(&mut self, drop: Option<Point>) -> Result<()> {
+        self.settling = false;
         if self.monitors.is_empty() {
             return Ok(());
         }
+        let windows = self.backend.windows()?;
+        self.settling = self.backend.settling();
         // Held windows that stopped being tileable without being minimized
         // are kept here to be released below.
-        let mut current: HashMap<WindowId, WindowInfo> = self
-            .backend
-            .windows()?
+        let mut current: HashMap<WindowId, WindowInfo> = windows
             .into_iter()
             .filter(|w| w.is_tileable() || (!w.is_minimized && self.info.contains_key(&w.id)))
             .map(|w| (w.id, w))
@@ -812,14 +816,14 @@ impl Engine {
         Ok(changed)
     }
 
-    /// Advances strip slides by `seconds` and moves the windows. Returns
-    /// whether any strip is still sliding.
     /// Whether the last sync met a window still being created, so the
     /// caller should sync again shortly: macOS does not say when it is done.
     pub fn is_settling(&self) -> bool {
-        self.backend.settling()
+        self.settling
     }
 
+    /// Advances strip slides by `seconds` and moves the windows. Returns
+    /// whether any strip is still sliding.
     pub fn tick(&mut self, seconds: f64) -> Result<bool> {
         if self.animator.advance(seconds, self.config.animation_duration) {
             if let Err(error) = self.write_frames() {
@@ -1201,8 +1205,8 @@ mod tests {
     fn new_window_read_before_it_is_standard_joins_once_it_is() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
         engine.sync().unwrap();
-        // macOS reports a window being created without its subrole for a moment.
-        // and says nothing once it has one, so the caller is asked to sync again.
+        // macOS reports a window being created without its subrole for a
+        // moment and says nothing once it has one, so the caller syncs again.
         backend.add(WindowInfo { is_standard: false, ..window(2, 400.0, 300.0) });
         backend.set_settling(true);
         engine.sync().unwrap();
@@ -1213,6 +1217,19 @@ mod tests {
         backend.set_settling(false);
         engine.sync().unwrap();
         assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+        assert!(!engine.is_settling());
+    }
+
+    #[test]
+    fn failed_sync_is_not_settling() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        backend.set_settling(true);
+        engine.sync().unwrap();
+        assert!(engine.is_settling());
+
+        // Otherwise the app would keep syncing while Accessibility is off.
+        backend.set_trusted(false);
+        assert!(engine.sync().is_err());
         assert!(!engine.is_settling());
     }
 

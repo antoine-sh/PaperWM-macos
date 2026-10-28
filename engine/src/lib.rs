@@ -12,6 +12,7 @@ pub mod ffi;
 pub mod geometry;
 pub mod mock;
 pub mod placement;
+pub mod settle;
 pub mod workspace;
 
 #[cfg(target_os = "macos")]
