@@ -466,12 +466,17 @@ impl Engine {
     /// workspace it showed, one that comes back gets the workspace it showed
     /// last unless another shows it now, and others get the first workspace
     /// not shown anywhere. Workspaces of removed monitors are hidden with
-    /// their windows.
+    /// their windows. Commands keep acting on the same display, or on the
+    /// main one if that display is gone.
     pub fn set_monitors(&mut self, monitors: &[(u32, Rect)]) -> Result<()> {
         if monitors.is_empty() {
             return Ok(());
         }
-        let current: HashMap<u32, usize> = self.monitors.iter().map(|m| (m.id, m.workspace)).collect();
+        let mut current: HashMap<u32, usize> = HashMap::new();
+        // The first of displays sharing an id keeps its workspace, so they don't trade on every call.
+        for m in &self.monitors {
+            current.entry(m.id).or_insert(m.workspace);
+        }
         self.remembered.extend(&current);
         let mut chosen: Vec<Option<usize>> = vec![None; monitors.len()];
         // Displays still connected keep theirs before returning ones claim theirs.
@@ -494,11 +499,7 @@ impl Engine {
             .zip(chosen)
             .map(|(&(id, area), workspace)| Monitor { id, area, workspace: workspace.expect("chosen above") })
             .collect();
-        self.active = self
-            .monitors
-            .iter()
-            .position(|m| Some(m.id) == active)
-            .unwrap_or_else(|| self.active.min(self.monitors.len() - 1));
+        self.active = self.monitors.iter().position(|m| Some(m.id) == active).unwrap_or(0);
         // macOS moves windows itself when displays change.
         self.applier.clear();
         self.backend.invalidate();
@@ -1667,8 +1668,28 @@ mod tests {
         engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
         engine.set_monitors(&[(1, SCREEN)]).unwrap();
         engine.command(Command::SwitchWorkspace(1)).unwrap();
-        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
-        assert_eq!(shown(&engine), vec![1, 0]);
+        // Returning as the main display, ahead of the one showing its workspace.
+        engine.set_monitors(&[(2, RIGHT), (1, SCREEN)]).unwrap();
+        assert_eq!(shown(&engine), vec![0, 1]);
+    }
+
+    #[test]
+    fn duplicate_display_ids_keep_their_workspaces() {
+        let (mut engine, _) = engine_with(vec![]);
+        engine.set_monitors(&[(1, SCREEN), (1, RIGHT)]).unwrap();
+        engine.set_monitors(&[(1, SCREEN), (1, RIGHT)]).unwrap();
+        assert_eq!(shown(&engine), vec![0, 1]);
+    }
+
+    #[test]
+    fn unplugging_the_active_monitor_makes_the_main_one_active() {
+        let far = Rect::new(1816.0, 0.0, 800.0, 600.0);
+        let (mut engine, _) = engine_with(vec![]);
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT), (3, far)]).unwrap();
+        engine.command(Command::FocusMonitorRight).unwrap();
+        assert_eq!(engine.state().active_monitor, 1);
+        engine.set_monitors(&[(1, SCREEN), (3, far)]).unwrap();
+        assert_eq!(engine.state().active_monitor, 0);
     }
 
     #[test]
