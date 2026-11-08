@@ -278,6 +278,8 @@ pub struct WindowState {
 
 #[derive(Debug, Clone, PartialEq)]
 struct Monitor {
+    /// The display's `CGDirectDisplayID`, stable while it is connected.
+    id: u32,
     /// Usable area (without menu bar and Dock), in Accessibility coordinates.
     area: Rect,
     /// Index of the workspace shown on this monitor.
@@ -294,6 +296,8 @@ pub struct Engine {
     active: usize,
     /// The workspace shown before the latest switch, for `LastWorkspace`.
     last_workspace: Option<usize>,
+    /// The workspace each display showed last, kept while it is disconnected.
+    remembered: HashMap<u32, usize>,
     /// Floating windows above all workspaces, with the frame each returns to.
     scratch: Vec<(WindowId, Rect)>,
     scratch_visible: bool,
@@ -325,6 +329,7 @@ impl Engine {
             monitors: Vec::new(),
             active: 0,
             last_workspace: None,
+            remembered: HashMap::new(),
             scratch: Vec::new(),
             scratch_visible: true,
             mru: Vec::new(),
@@ -455,25 +460,45 @@ impl Engine {
         }
     }
 
-    /// Sets the usable area of each monitor, the main one first. Monitors
-    /// keep the workspace they showed by index; new ones get the first
-    /// workspace not shown anywhere. Workspaces of removed monitors are
-    /// hidden with their windows.
-    pub fn set_monitors(&mut self, areas: &[Rect]) -> Result<()> {
-        if areas.is_empty() {
+    /// Sets each monitor's display id and usable area, the main one first.
+    /// Monitors are matched by display id, since the order changes with the
+    /// main display and displays drop out for a while on wake: each keeps the
+    /// workspace it showed, one that comes back gets the workspace it showed
+    /// last unless another shows it now, and others get the first workspace
+    /// not shown anywhere. Workspaces of removed monitors are hidden with
+    /// their windows.
+    pub fn set_monitors(&mut self, monitors: &[(u32, Rect)]) -> Result<()> {
+        if monitors.is_empty() {
             return Ok(());
         }
-        let mut monitors: Vec<Monitor> = Vec::with_capacity(areas.len());
-        for (i, &area) in areas.iter().enumerate() {
-            let kept = self.monitors.get(i).map(|m| m.workspace);
-            let workspace = kept
-                .filter(|w| monitors.iter().all(|m| m.workspace != *w))
-                .or_else(|| (0..WORKSPACE_COUNT).find(|w| monitors.iter().all(|m| m.workspace != *w)))
-                .unwrap_or(0);
-            monitors.push(Monitor { area, workspace });
+        let current: HashMap<u32, usize> = self.monitors.iter().map(|m| (m.id, m.workspace)).collect();
+        self.remembered.extend(&current);
+        let mut chosen: Vec<Option<usize>> = vec![None; monitors.len()];
+        // Displays still connected keep theirs before returning ones claim theirs.
+        for wanted in [&current, &self.remembered] {
+            for (i, (id, _)) in monitors.iter().enumerate() {
+                let w = wanted.get(id).copied();
+                if chosen[i].is_none() && w.is_some() && !chosen.contains(&w) {
+                    chosen[i] = w;
+                }
+            }
         }
-        self.monitors = monitors;
-        self.active = self.active.min(self.monitors.len() - 1);
+        for i in 0..monitors.len() {
+            if chosen[i].is_none() {
+                chosen[i] = Some((0..WORKSPACE_COUNT).find(|w| !chosen.contains(&Some(*w))).unwrap_or(0));
+            }
+        }
+        let active = self.monitors.get(self.active).map(|m| m.id);
+        self.monitors = monitors
+            .iter()
+            .zip(chosen)
+            .map(|(&(id, area), workspace)| Monitor { id, area, workspace: workspace.expect("chosen above") })
+            .collect();
+        self.active = self
+            .monitors
+            .iter()
+            .position(|m| Some(m.id) == active)
+            .unwrap_or_else(|| self.active.min(self.monitors.len() - 1));
         // macOS moves windows itself when displays change.
         self.applier.clear();
         self.backend.invalidate();
@@ -1166,7 +1191,7 @@ mod tests {
         let backend = Rc::new(MockBackend::new(windows));
         let mut engine = Engine::new(Box::new(Shared(backend.clone())));
         engine.set_config(Config { animation_duration: 0.0, ..Config::default() }).unwrap();
-        engine.set_monitors(&[SCREEN]).unwrap();
+        engine.set_monitors(&[(1, SCREEN)]).unwrap();
         (engine, backend)
     }
 
@@ -1576,7 +1601,7 @@ mod tests {
     #[test]
     fn columns_never_overhang_a_neighbouring_monitor() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 600.0), window(2, 100.0, 600.0)]);
-        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
         engine.sync().unwrap();
         engine.command(Command::FocusLeft).unwrap();
         // Mostly on this monitor, but macOS would still show the rest on the
@@ -1587,7 +1612,7 @@ mod tests {
     #[test]
     fn windows_go_to_the_monitor_they_are_on() {
         let (mut engine, _) = engine_with(vec![window(1, 0.0, 300.0), window(2, 1200.0, 300.0)]);
-        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
         engine.sync().unwrap();
         assert_eq!(columns(&engine), vec![vec![1]]);
         assert_eq!(engine.workspace(1).unwrap().columns()[0].windows(), &[2]);
@@ -1596,24 +1621,75 @@ mod tests {
     #[test]
     fn monitors_show_distinct_workspaces() {
         let (mut engine, _) = engine_with(vec![]);
-        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
         assert_eq!(shown(&engine), vec![0, 1]);
     }
 
     #[test]
     fn unplugged_monitor_hides_its_workspace() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 1200.0, 300.0)]);
-        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
         engine.sync().unwrap();
         backend.set_focused(Some(2));
         engine.sync().unwrap();
         assert_eq!(engine.state().active_monitor, 1);
 
-        engine.set_monitors(&[SCREEN]).unwrap();
+        engine.set_monitors(&[(1, SCREEN)]).unwrap();
         assert_eq!(engine.state().active_monitor, 0);
         assert_eq!(columns(&engine), vec![vec![1]]);
         assert_eq!(engine.workspace(1).unwrap().columns()[0].windows(), &[2]);
         assert!(is_hidden(backend.frame_of(2).unwrap()));
+    }
+
+    #[test]
+    fn returning_monitor_gets_back_its_workspace() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
+        engine.sync().unwrap();
+        engine.command(Command::FocusMonitorRight).unwrap();
+        engine.command(Command::SwitchWorkspace(4)).unwrap();
+        backend.add(window(2, 1200.0, 300.0));
+        engine.sync().unwrap();
+        assert_eq!(engine.workspace(4).unwrap().columns()[0].windows(), &[2]);
+
+        // Displays often drop out and come back while waking from sleep.
+        engine.set_monitors(&[(1, SCREEN)]).unwrap();
+        assert!(is_hidden(backend.frame_of(2).unwrap()));
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
+        assert_eq!(shown(&engine), vec![0, 4]);
+        assert!(!is_hidden(backend.frame_of(2).unwrap()));
+        assert!(backend.frame_of(2).unwrap().x >= RIGHT.x);
+    }
+
+    #[test]
+    fn returning_monitor_whose_workspace_is_shown_gets_another() {
+        let (mut engine, _) = engine_with(vec![]);
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
+        engine.set_monitors(&[(1, SCREEN)]).unwrap();
+        engine.command(Command::SwitchWorkspace(1)).unwrap();
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
+        assert_eq!(shown(&engine), vec![1, 0]);
+    }
+
+    #[test]
+    fn monitors_keep_their_workspace_when_the_main_display_changes() {
+        let (mut engine, _) = engine_with(vec![]);
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
+        engine.set_monitors(&[(2, RIGHT), (1, SCREEN)]).unwrap();
+        assert_eq!(shown(&engine), vec![1, 0]);
+        // Keyboard commands still act on the same display.
+        assert_eq!(engine.state().active_monitor, 1);
+    }
+
+    #[test]
+    fn middle_monitor_leaving_and_returning_keeps_workspaces_in_place() {
+        let far = Rect::new(1816.0, 0.0, 800.0, 600.0);
+        let (mut engine, _) = engine_with(vec![]);
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT), (3, far)]).unwrap();
+        engine.set_monitors(&[(1, SCREEN), (3, far)]).unwrap();
+        assert_eq!(shown(&engine), vec![0, 2]);
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT), (3, far)]).unwrap();
+        assert_eq!(shown(&engine), vec![0, 1, 2]);
     }
 
     #[test]
@@ -1642,7 +1718,7 @@ mod tests {
     #[test]
     fn switch_to_workspace_on_other_monitor_swaps() {
         let (mut engine, _) = engine_with(vec![]);
-        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
         assert_eq!(engine.command(Command::SwitchWorkspace(1)), Ok(true));
         assert_eq!(shown(&engine), vec![1, 0]);
     }
@@ -1737,7 +1813,7 @@ mod tests {
     #[test]
     fn focus_monitor_right_activates_and_focuses() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 1200.0, 300.0)]);
-        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
         engine.sync().unwrap();
         backend.set_focused(Some(1));
         engine.sync().unwrap();
@@ -1761,7 +1837,7 @@ mod tests {
     fn move_to_monitor_inserts_next_to_target_focus() {
         let (mut engine, backend) =
             engine_with(vec![window(1, 0.0, 300.0), window(2, 1100.0, 300.0), window(3, 1500.0, 300.0)]);
-        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
         engine.sync().unwrap();
         // Window 2 is focused on the right monitor; focus window 1 on the left.
         backend.set_focused(Some(2));
@@ -1970,7 +2046,7 @@ mod tests {
     #[test]
     fn focusing_monitor_with_empty_workspace_survives_sync() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0)]);
-        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
         engine.sync().unwrap();
         backend.set_focused(Some(1));
         engine.command(Command::FocusMonitorRight).unwrap();
@@ -2173,7 +2249,7 @@ mod tests {
     #[test]
     fn reports_missing_permission() {
         let mut engine = Engine::new(Box::new(MockBackend::untrusted()));
-        engine.set_monitors(&[SCREEN]).unwrap();
+        engine.set_monitors(&[(1, SCREEN)]).unwrap();
         assert_eq!(engine.sync(), Err(BackendError::NotTrusted));
     }
 
@@ -2328,7 +2404,7 @@ mod tests {
     #[test]
     fn window_dropped_on_another_monitor_joins_its_strip() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 1200.0, 300.0)]);
-        engine.set_monitors(&[SCREEN, RIGHT]).unwrap();
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
         engine.sync().unwrap();
         drag(&backend, 1, 1050.0);
         backend.set_focused(Some(1));
@@ -2438,8 +2514,8 @@ mod tests {
         engine.command(Command::FocusRight).unwrap();
         let before = backend.frame_of(2);
         // macOS may report a smaller screen for a moment while waking from sleep.
-        engine.set_monitors(&[Rect { width: 516.0, ..SCREEN }]).unwrap();
-        engine.set_monitors(&[SCREEN]).unwrap();
+        engine.set_monitors(&[(1, Rect { width: 516.0, ..SCREEN })]).unwrap();
+        engine.set_monitors(&[(1, SCREEN)]).unwrap();
         assert_eq!(backend.frame_of(2), before);
     }
 
