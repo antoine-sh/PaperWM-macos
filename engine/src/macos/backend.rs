@@ -210,7 +210,9 @@ impl WindowBackend for AxBackend {
                     return Err(BackendError::NotTrusted);
                 }
                 Err(_) => {
-                    if self.is_stalled(pid) {
+                    // An app that answered before and fails now, as apps do
+                    // for a while after waking, still has its windows.
+                    if self.is_stalled(pid) || previous.values().any(|c| c.pid == pid) {
                         skipped.push(pid);
                     }
                     // Apps without Accessibility support are skipped.
@@ -229,6 +231,12 @@ impl WindowBackend for AxBackend {
                     Err(_) if self.is_stalled(pid) => {
                         complete = false;
                         break;
+                    }
+                    // A known window still on screen that does not answer, as
+                    // after waking, keeps its column rather than closing.
+                    Err(_) if on_screen.contains_key(&id) && previous.contains_key(&id) => {
+                        complete = false;
+                        continue;
                     }
                     // The window closed meanwhile.
                     Err(_) => continue,

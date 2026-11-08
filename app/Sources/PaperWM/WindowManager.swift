@@ -35,6 +35,17 @@ final class WindowManager {
     private var lastTick: CFTimeInterval = 0
     /// When each distinct error was last logged, to keep repeats out of the log.
     private var lastLogged: [String: CFTimeInterval] = [:]
+    /// The sleep notifications not yet followed by their wake. Windows read
+    /// while the Mac, its displays or the session sleep, or the screen is
+    /// locked, are off screen and would leave the layout, losing their place.
+    private var asleep: Set<Notification.Name> = []
+    /// Each wake notification, with the sleep notification it ends.
+    private static let wakes: [Notification.Name: Notification.Name] = [
+        NSWorkspace.didWakeNotification: NSWorkspace.willSleepNotification,
+        NSWorkspace.screensDidWakeNotification: NSWorkspace.screensDidSleepNotification,
+        NSWorkspace.sessionDidBecomeActiveNotification: NSWorkspace.sessionDidResignActiveNotification,
+        Notification.Name("com.apple.screenIsUnlocked"): Notification.Name("com.apple.screenIsLocked"),
+    ]
 
     func start() {
         connectEngine()
@@ -50,6 +61,12 @@ final class WindowManager {
         }
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged(_:)),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
+        let locks = DistributedNotificationCenter.default()
+        for (wake, sleep) in Self.wakes {
+            let center: NotificationCenter = wake.rawValue.hasPrefix("com.apple.") ? locks : workspace
+            center.addObserver(self, selector: #selector(slept(_:)), name: sleep, object: nil)
+            center.addObserver(self, selector: #selector(woke(_:)), name: wake, object: nil)
+        }
 
         settings.onChange = { [weak self] in self?.applySettings() }
         applySettings()
@@ -208,6 +225,7 @@ final class WindowManager {
     }
 
     func syncNow() {
+        guard asleep.isEmpty else { return }
         report { try engine.sync() }
         publish()
     }
@@ -233,6 +251,7 @@ final class WindowManager {
     }
 
     private func updateMonitors() {
+        guard asleep.isEmpty else { return }
         report {
             try engine.setMonitors(NSScreen.screens.map(\.accessibilityVisibleFrame))
             try engine.sync()
@@ -295,6 +314,22 @@ final class WindowManager {
 
     @objc private func screensChanged(_ notification: Notification) {
         updateMonitors()
+    }
+
+    @objc private func slept(_ notification: Notification) {
+        asleep.insert(notification.name)
+    }
+
+    /// Reads every monitor and window again once nothing sleeps any more:
+    /// syncs held meanwhile were dropped, and displays and apps come back
+    /// over a few seconds, refusing Accessibility requests for a while.
+    @objc private func woke(_ notification: Notification) {
+        guard let sleep = Self.wakes[notification.name], asleep.remove(sleep) != nil, asleep.isEmpty else { return }
+        for delay in [0.5, 2.0, 5.0] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                MainActor.assumeIsolated { self?.updateMonitors() }
+            }
+        }
     }
 }
 
