@@ -47,7 +47,7 @@ final class WindowManager {
         Notification.Name("com.apple.screenIsUnlocked"): Notification.Name("com.apple.screenIsLocked"),
     ]
     /// Syncs stay held a moment after the last wake, while the lock screen
-    /// fades and displays come back; the first pass after waking ends it.
+    /// fades and displays come back.
     private var heldUntil: CFTimeInterval = 0
     private var isHeld: Bool { !asleep.isEmpty || CACurrentMediaTime() < heldUntil }
 
@@ -258,6 +258,9 @@ final class WindowManager {
     /// Restarts the engine from scratch: forgets all layout and observers,
     /// then re-reads every app, window and monitor as on launch.
     func retile() {
+        // Re-tile is the way out of a pause that never ended.
+        asleep.removeAll()
+        heldUntil = 0
         frames.stop()
         syncDeferred = false
         engine = Engine()
@@ -322,6 +325,7 @@ final class WindowManager {
            app.activationPolicy == .regular {
             engine.observeApp(app.processIdentifier)
         }
+        wakeIfUnlocked()
         scheduleSync()
     }
 
@@ -341,23 +345,29 @@ final class WindowManager {
     /// syncs held meanwhile were dropped, and displays and apps come back
     /// over a few seconds, refusing Accessibility requests for a while.
     @objc private func woke(_ notification: Notification) {
-        guard let sleep = Self.wakes[notification.name], asleep.remove(sleep) != nil else { return }
-        // A sleep whose wake never came must not hold syncs for good.
-        if Self.isUnlockedOnConsole() {
-            asleep.removeAll()
+        guard let sleep = Self.wakes[notification.name] else { return }
+        asleep.remove(sleep)
+        if asleep.isEmpty {
+            resume()
+        } else {
+            wakeIfUnlocked()
         }
+    }
+
+    /// Ends every pause once the user is back at an unlocked screen, so a
+    /// sleep whose wake never came cannot hold syncs for good.
+    private func wakeIfUnlocked() {
+        guard !asleep.isEmpty, Self.isUnlockedOnConsole() else { return }
+        asleep.removeAll()
         resume()
     }
 
     private func resume() {
         guard asleep.isEmpty else { return }
         heldUntil = CACurrentMediaTime() + 0.5
-        for delay in [0.5, 2.0, 5.0, 10.0] {
+        for delay in [0.6, 2.0, 5.0, 10.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                MainActor.assumeIsolated {
-                    self?.heldUntil = 0
-                    self?.updateMonitors()
-                }
+                MainActor.assumeIsolated { self?.updateMonitors() }
             }
         }
     }
