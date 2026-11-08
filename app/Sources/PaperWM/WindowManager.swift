@@ -273,7 +273,7 @@ final class WindowManager {
     private func updateMonitors() {
         guard !isHeld else { return }
         report {
-            try engine.setMonitors(NSScreen.screens.map(\.accessibilityVisibleFrame))
+            try engine.setMonitors(NSScreen.screens)
             try engine.sync()
         }
         publish()

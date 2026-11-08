@@ -176,21 +176,28 @@ pub extern "C" fn pwm_last_error() -> *const c_char {
     LAST_ERROR.with(|last| last.borrow().as_ptr())
 }
 
-/// Sets the usable area of each monitor, main monitor first.
+/// Sets the display id and usable area of each monitor, main monitor first.
 ///
 /// # Safety
-/// `engine` must be a live pointer from `pwm_engine_new`, or null. `areas`
-/// must point to `count` rects.
+/// `engine` must be a live pointer from `pwm_engine_new`, or null. `ids`
+/// and `areas` must each point to `count` values.
 #[no_mangle]
-pub unsafe extern "C" fn pwm_engine_set_monitors(engine: *mut Engine, areas: *const Rect, count: usize) -> PwmStatus {
+pub unsafe extern "C" fn pwm_engine_set_monitors(
+    engine: *mut Engine,
+    ids: *const u32,
+    areas: *const Rect,
+    count: usize,
+) -> PwmStatus {
     let Some(engine) = engine.as_mut() else {
         return PwmStatus::NullPointer;
     };
-    if areas.is_null() || count == 0 {
+    if ids.is_null() || areas.is_null() || count == 0 {
         return PwmStatus::InvalidArgument;
     }
+    let ids = std::slice::from_raw_parts(ids, count);
     let areas = std::slice::from_raw_parts(areas, count);
-    status(guarded(|| engine.set_monitors(areas)))
+    let monitors: Vec<(u32, Rect)> = ids.iter().copied().zip(areas.iter().copied()).collect();
+    status(guarded(|| engine.set_monitors(&monitors)))
 }
 
 /// Brings the layout up to date with the current windows and focus.
@@ -442,7 +449,7 @@ mod tests {
         let engine = Box::into_raw(Box::new(Engine::new(Box::new(MockBackend::untrusted()))));
         unsafe {
             let areas = [Rect::new(0.0, 0.0, 800.0, 600.0)];
-            pwm_engine_set_monitors(engine, areas.as_ptr(), 1);
+            pwm_engine_set_monitors(engine, [1].as_ptr(), areas.as_ptr(), 1);
             assert_eq!(pwm_engine_sync(engine), PwmStatus::NotTrusted);
             let message = CStr::from_ptr(pwm_last_error()).to_str().unwrap();
             assert!(message.contains("Accessibility"), "{message}");
@@ -540,7 +547,7 @@ mod tests {
         let engine = raw_engine(vec![MockBackend::window(1, Rect::new(10.0, 10.0, 10.0, 10.0))]);
         unsafe {
             let areas = [Rect::new(0.0, 0.0, 800.0, 600.0)];
-            pwm_engine_set_monitors(engine, areas.as_ptr(), 1);
+            pwm_engine_set_monitors(engine, [1].as_ptr(), areas.as_ptr(), 1);
             pwm_engine_sync(engine);
             let json = pwm_engine_state_json(engine);
             let value: serde_json::Value = serde_json::from_str(CStr::from_ptr(json).to_str().unwrap()).unwrap();
@@ -557,9 +564,9 @@ mod tests {
         let engine = raw_engine(vec![MockBackend::window(1, Rect::new(10.0, 10.0, 10.0, 10.0))]);
         unsafe {
             assert_eq!(pwm_engine_sync(engine), PwmStatus::Ok);
-            assert_eq!(pwm_engine_set_monitors(engine, ptr::null(), 0), PwmStatus::InvalidArgument);
+            assert_eq!(pwm_engine_set_monitors(engine, ptr::null(), ptr::null(), 0), PwmStatus::InvalidArgument);
             let areas = [Rect::new(0.0, 0.0, 800.0, 600.0)];
-            assert_eq!(pwm_engine_set_monitors(engine, areas.as_ptr(), 1), PwmStatus::Ok);
+            assert_eq!(pwm_engine_set_monitors(engine, [1].as_ptr(), areas.as_ptr(), 1), PwmStatus::Ok);
             assert_eq!(pwm_engine_sync(engine), PwmStatus::Ok);
             assert_eq!((*engine).workspace(0).unwrap().focused_window(), Some(1));
             let mut changed = true;

@@ -110,8 +110,9 @@ void pwm_window_list_free(PwmWindowList list);
 // next failing call. A panic in the engine fails the call with PLATFORM_ERROR.
 const char *pwm_last_error(void);
 
-// Usable area of each monitor (Accessibility coordinates), main one first.
-PwmStatus pwm_engine_set_monitors(PwmEngine *engine, const PwmRect *areas, size_t count);
+// Display id (CGDirectDisplayID) and usable area (Accessibility coordinates)
+// of each monitor, main one first. Each display keeps its workspace by id.
+PwmStatus pwm_engine_set_monitors(PwmEngine *engine, const uint32_t *ids, const PwmRect *areas, size_t count);
 
 // Brings the layout up to date with the current windows and focus.
 PwmStatus pwm_engine_sync(PwmEngine *engine);

@@ -85,10 +85,14 @@ final class Engine {
         }
     }
 
-    /// Usable area of each monitor in Accessibility coordinates, main one first.
-    func setMonitors(_ areas: [CGRect]) throws {
-        let rects = areas.map(PwmRect.init)
-        let status = rects.withUnsafeBufferPointer { pwm_engine_set_monitors(handle, $0.baseAddress, $0.count) }
+    /// Display id and usable area of each monitor in Accessibility
+    /// coordinates, main one first. The engine keeps workspaces by display id.
+    func setMonitors(_ screens: [NSScreen]) throws {
+        let ids = screens.map { $0.displayID }
+        let rects = screens.map { PwmRect($0.accessibilityVisibleFrame) }
+        let status = ids.withUnsafeBufferPointer { ids in
+            rects.withUnsafeBufferPointer { pwm_engine_set_monitors(handle, ids.baseAddress, $0.baseAddress, $0.count) }
+        }
         if let error = EngineError(status) { throw error }
     }
 
@@ -199,4 +203,10 @@ extension CGRect {
 extension NSScreen {
     /// `visibleFrame` converted to Accessibility coordinates.
     var accessibilityVisibleFrame: CGRect { visibleFrame.flippedForScreens }
+
+    /// The display's `CGDirectDisplayID`, which stays the same while it is
+    /// disconnected and plugged back in, unlike its place in `NSScreen.screens`.
+    var displayID: UInt32 {
+        (deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value ?? 0
+    }
 }
