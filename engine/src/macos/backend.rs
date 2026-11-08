@@ -22,6 +22,11 @@ use crate::settle::Settling;
 const TIMED_OUT: Duration = Duration::from_millis((ax::MESSAGING_TIMEOUT * 800.0) as u64);
 /// How long to leave a busy app alone before asking it again.
 const BACK_OFF: Duration = Duration::from_secs(2);
+/// How long an app that answered before, and now fails as busy, is taken
+/// for busy rather than gone, keeping its windows. Apps answer badly for a
+/// few seconds after waking; one that keeps failing must not keep closed
+/// windows in the layout.
+const STILL_BUSY: Duration = Duration::from_secs(15);
 /// Not among `accessibility_sys`'s constants.
 const FULL_SCREEN_ATTRIBUTE: &str = "AXFullScreen";
 /// What `windows()` reads of each window, in one round trip. The minimized
@@ -58,6 +63,8 @@ pub struct AxBackend {
     /// Apps that timed out, and when to try them again. Calls to them fail
     /// at once until then, so one hung app cannot stall every frame.
     stalled: RefCell<HashMap<i32, Instant>>,
+    /// When each app last read fine began failing as busy; see [`STILL_BUSY`].
+    busy: RefCell<HashMap<i32, Instant>>,
     /// Apps left out of the last `windows()` call, busy or unchanged.
     skipped: RefCell<Vec<i32>>,
     /// Each app's on-screen windows when its windows were last read. An app
@@ -137,6 +144,13 @@ impl AxBackend {
         result
     }
 
+    /// Whether `pid` may only be busy, counting from its first failure since
+    /// it last read fine.
+    fn still_busy(&self, pid: i32) -> bool {
+        let now = Instant::now();
+        now - *self.busy.borrow_mut().entry(pid).or_insert(now) < STILL_BUSY
+    }
+
     /// Maps an AX error, dropping the cached handle of a window that is gone.
     fn forget_on_error(&self, err: AXError, id: WindowId) -> BackendError {
         let err = to_backend_error(err, id);
@@ -153,7 +167,9 @@ impl WindowBackend for AxBackend {
     }
 
     fn windows(&self) -> Result<Vec<WindowInfo>> {
-        let on_screen = window_list::on_screen_windows();
+        // Without the list every window would look closed.
+        let on_screen = window_list::on_screen_windows()
+            .ok_or_else(|| BackendError::Platform("the window server did not list windows".into()))?;
         let own_pid = std::process::id() as i32;
         let previous = std::mem::take(&mut *self.elements.borrow_mut());
         // Apps without on-screen windows only have minimized windows or
@@ -209,8 +225,14 @@ impl WindowBackend for AxBackend {
                     self.handler.everything.set(true);
                     return Err(BackendError::NotTrusted);
                 }
-                Err(_) => {
-                    if self.is_stalled(pid) {
+                Err(err) => {
+                    // An app that answered before and is busy now, as apps
+                    // are for a while after waking, still has its windows.
+                    if self.is_stalled(pid)
+                        || (err == kAXErrorCannotComplete
+                            && previous.values().any(|c| c.pid == pid)
+                            && self.still_busy(pid))
+                    {
                         skipped.push(pid);
                     }
                     // Apps without Accessibility support are skipped.
@@ -229,6 +251,17 @@ impl WindowBackend for AxBackend {
                     Err(_) if self.is_stalled(pid) => {
                         complete = false;
                         break;
+                    }
+                    // A known window still on screen that is busy, as after
+                    // waking, keeps its column rather than closing.
+                    Err(err)
+                        if err == kAXErrorCannotComplete
+                            && on_screen.contains_key(&id)
+                            && previous.contains_key(&id)
+                            && self.still_busy(pid) =>
+                    {
+                        complete = false;
+                        continue;
                     }
                     // The window closed meanwhile.
                     Err(_) => continue,
@@ -313,6 +346,7 @@ impl WindowBackend for AxBackend {
             away.retain(|(w, _)| w.pid != pid || !tabs.contains(&w.id));
             if complete {
                 seen.insert(pid, ids);
+                self.busy.borrow_mut().remove(&pid);
             } else {
                 skipped.push(pid);
             }
@@ -445,6 +479,7 @@ impl WindowBackend for AxBackend {
 
     fn forget_app(&self, pid: i32) {
         self.observers.borrow_mut().remove(&pid);
+        self.busy.borrow_mut().remove(&pid);
         self.stalled.borrow_mut().remove(&pid);
         self.apps.borrow_mut().remove(&pid);
         self.seen.borrow_mut().remove(&pid);
