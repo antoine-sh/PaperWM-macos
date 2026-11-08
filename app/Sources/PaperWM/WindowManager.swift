@@ -46,6 +46,10 @@ final class WindowManager {
         NSWorkspace.sessionDidBecomeActiveNotification: NSWorkspace.sessionDidResignActiveNotification,
         Notification.Name("com.apple.screenIsUnlocked"): Notification.Name("com.apple.screenIsLocked"),
     ]
+    /// Syncs stay held a moment after the last wake, while the lock screen
+    /// fades and displays come back; the first pass after waking ends it.
+    private var heldUntil: CFTimeInterval = 0
+    private var isHeld: Bool { !asleep.isEmpty || CACurrentMediaTime() < heldUntil }
 
     func start() {
         connectEngine()
@@ -63,9 +67,17 @@ final class WindowManager {
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
         let locks = DistributedNotificationCenter.default()
         for (wake, sleep) in Self.wakes {
-            let center: NotificationCenter = wake.rawValue.hasPrefix("com.apple.") ? locks : workspace
-            center.addObserver(self, selector: #selector(slept(_:)), name: sleep, object: nil)
-            center.addObserver(self, selector: #selector(woke(_:)), name: wake, object: nil)
+            if wake.rawValue.hasPrefix("com.apple.") {
+                // A menu bar app is rarely active, and distributed
+                // notifications wait for that by default.
+                locks.addObserver(self, selector: #selector(slept(_:)), name: sleep, object: nil,
+                                  suspensionBehavior: .deliverImmediately)
+                locks.addObserver(self, selector: #selector(woke(_:)), name: wake, object: nil,
+                                  suspensionBehavior: .deliverImmediately)
+            } else {
+                workspace.addObserver(self, selector: #selector(slept(_:)), name: sleep, object: nil)
+                workspace.addObserver(self, selector: #selector(woke(_:)), name: wake, object: nil)
+            }
         }
 
         settings.onChange = { [weak self] in self?.applySettings() }
@@ -100,6 +112,11 @@ final class WindowManager {
     }
 
     func perform(_ action: Action) {
+        // A hot key or gesture means the user is back, whatever was missed.
+        if !asleep.isEmpty {
+            asleep.removeAll()
+            resume()
+        }
         switch action {
         case .engine(PWM_COMMAND_TOGGLE_SCRATCH, _) where switcher.isOpen:
             // ⌃⌥Esc while switching cancels, as Esc does in PaperWM.
@@ -225,7 +242,7 @@ final class WindowManager {
     }
 
     func syncNow() {
-        guard asleep.isEmpty else { return }
+        guard !isHeld else { return }
         report { try engine.sync() }
         publish()
     }
@@ -251,7 +268,7 @@ final class WindowManager {
     }
 
     private func updateMonitors() {
-        guard asleep.isEmpty else { return }
+        guard !isHeld else { return }
         report {
             try engine.setMonitors(NSScreen.screens.map(\.accessibilityVisibleFrame))
             try engine.sync()
@@ -324,12 +341,32 @@ final class WindowManager {
     /// syncs held meanwhile were dropped, and displays and apps come back
     /// over a few seconds, refusing Accessibility requests for a while.
     @objc private func woke(_ notification: Notification) {
-        guard let sleep = Self.wakes[notification.name], asleep.remove(sleep) != nil, asleep.isEmpty else { return }
-        for delay in [0.5, 2.0, 5.0] {
+        guard let sleep = Self.wakes[notification.name], asleep.remove(sleep) != nil else { return }
+        // A sleep whose wake never came must not hold syncs for good.
+        if Self.isUnlockedOnConsole() {
+            asleep.removeAll()
+        }
+        resume()
+    }
+
+    private func resume() {
+        guard asleep.isEmpty else { return }
+        heldUntil = CACurrentMediaTime() + 0.5
+        for delay in [0.5, 2.0, 5.0, 10.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
-                MainActor.assumeIsolated { self?.updateMonitors() }
+                MainActor.assumeIsolated {
+                    self?.heldUntil = 0
+                    self?.updateMonitors()
+                }
             }
         }
+    }
+
+    /// Whether this user's session is in front and the screen is not locked.
+    private static func isUnlockedOnConsole() -> Bool {
+        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
+        let onConsole = session["kCGSSessionOnConsoleKey"] as? Bool == true
+        return onConsole && session["CGSSessionScreenIsLocked"] as? Bool != true
     }
 }
 

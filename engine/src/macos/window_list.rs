@@ -35,13 +35,14 @@ pub struct ScreenWindow {
     pub owner_name: String,
 }
 
-/// Regular app windows currently on screen, keyed by window id.
-pub fn on_screen_windows() -> HashMap<WindowId, ScreenWindow> {
+/// Regular app windows currently on screen, keyed by window id, or `None`
+/// when the window server gives no list.
+pub fn on_screen_windows() -> Option<HashMap<WindowId, ScreenWindow>> {
     let mut result = HashMap::new();
     unsafe {
         let list = CGWindowListCopyWindowInfo(ON_SCREEN_ONLY | EXCLUDE_DESKTOP_ELEMENTS, NULL_WINDOW_ID);
         if list.is_null() {
-            return result;
+            return None;
         }
         for i in 0..CFArrayGetCount(list) {
             let info = CFArrayGetValueAtIndex(list, i) as CFDictionaryRef;
@@ -58,7 +59,7 @@ pub fn on_screen_windows() -> HashMap<WindowId, ScreenWindow> {
         }
         CFRelease(list as CFTypeRef);
     }
-    result
+    Some(result)
 }
 
 unsafe fn number(dict: CFDictionaryRef, key: CFStringRef) -> Option<i64> {

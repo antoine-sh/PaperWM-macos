@@ -153,7 +153,9 @@ impl WindowBackend for AxBackend {
     }
 
     fn windows(&self) -> Result<Vec<WindowInfo>> {
-        let on_screen = window_list::on_screen_windows();
+        // Without the list every window would look closed.
+        let on_screen = window_list::on_screen_windows()
+            .ok_or_else(|| BackendError::Platform("the window server did not list windows".into()))?;
         let own_pid = std::process::id() as i32;
         let previous = std::mem::take(&mut *self.elements.borrow_mut());
         // Apps without on-screen windows only have minimized windows or
@@ -209,10 +211,11 @@ impl WindowBackend for AxBackend {
                     self.handler.everything.set(true);
                     return Err(BackendError::NotTrusted);
                 }
-                Err(_) => {
-                    // An app that answered before and fails now, as apps do
-                    // for a while after waking, still has its windows.
-                    if self.is_stalled(pid) || previous.values().any(|c| c.pid == pid) {
+                Err(err) => {
+                    // An app that answered before and is busy now, as apps
+                    // are for a while after waking, still has its windows.
+                    if self.is_stalled(pid) || err == kAXErrorCannotComplete && previous.values().any(|c| c.pid == pid)
+                    {
                         skipped.push(pid);
                     }
                     // Apps without Accessibility support are skipped.
@@ -232,9 +235,13 @@ impl WindowBackend for AxBackend {
                         complete = false;
                         break;
                     }
-                    // A known window still on screen that does not answer, as
-                    // after waking, keeps its column rather than closing.
-                    Err(_) if on_screen.contains_key(&id) && previous.contains_key(&id) => {
+                    // A known window still on screen that is busy, as after
+                    // waking, keeps its column rather than closing.
+                    Err(err)
+                        if err == kAXErrorCannotComplete
+                            && on_screen.contains_key(&id)
+                            && previous.contains_key(&id) =>
+                    {
                         complete = false;
                         continue;
                     }
