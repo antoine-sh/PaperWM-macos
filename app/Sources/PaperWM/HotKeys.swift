@@ -62,7 +62,6 @@ struct HotKey {
     /// Groups shortcuts in Settings and the README, in display order.
     enum Category: String, CaseIterable {
         case focus = "Focus and Move"
-        case workspaces = "Workspaces"
         case monitors = "Monitors"
         case size = "Size"
         case layout = "Column Layout"
@@ -99,7 +98,6 @@ struct HotKey {
                                   combo: KeyCombo(keyCode: keyCode, modifiers: modifiers)))
             }
         }
-        let workspaces = 1...Int(PWM_WORKSPACE_COUNT)
         add(.focus, [
             ("focus-left", "Focus Left", kVK_LeftArrow, base, .engine(PWM_COMMAND_FOCUS_LEFT)),
             ("focus-right", "Focus Right", kVK_RightArrow, base, .engine(PWM_COMMAND_FOCUS_RIGHT)),
@@ -113,30 +111,10 @@ struct HotKey {
             ("move-up", "Move Window Up", kVK_UpArrow, shift, .engine(PWM_COMMAND_MOVE_UP)),
             ("move-down", "Move Window Down", kVK_DownArrow, shift, .engine(PWM_COMMAND_MOVE_DOWN)),
         ])
-        add(.workspaces, workspaces.map { n -> Entry in
-            ("switch-workspace-\(n)", "Switch to Workspace \(n)", digitKeys[n], base,
-             .engine(PWM_COMMAND_SWITCH_WORKSPACE, Double(n - 1)))
-        })
-        add(.workspaces, workspaces.map { n -> Entry in
-            ("move-to-workspace-\(n)", "Move Window to Workspace \(n)", digitKeys[n], shift,
-             .engine(PWM_COMMAND_MOVE_TO_WORKSPACE, Double(n - 1)))
-        })
-        add(.workspaces, [
-            ("previous-workspace", "Previous Workspace", kVK_ANSI_LeftBracket, base,
-             .engine(PWM_COMMAND_PREVIOUS_WORKSPACE)),
-            ("next-workspace", "Next Workspace", kVK_ANSI_RightBracket, base, .engine(PWM_COMMAND_NEXT_WORKSPACE)),
-            ("move-to-previous-workspace", "Move Window to Previous Workspace", kVK_ANSI_LeftBracket, shift,
-             .engine(PWM_COMMAND_MOVE_TO_PREVIOUS_WORKSPACE)),
-            ("move-to-next-workspace", "Move Window to Next Workspace", kVK_ANSI_RightBracket, shift,
-             .engine(PWM_COMMAND_MOVE_TO_NEXT_WORKSPACE)),
-            ("last-workspace", "Last Used Workspace", kVK_ANSI_Grave, base, .engine(PWM_COMMAND_LAST_WORKSPACE)),
-        ])
         // , and . carry < and >.
         add(.monitors, [
-            ("focus-monitor-left", "Focus Monitor Left", kVK_ANSI_Comma, base,
-             .engine(PWM_COMMAND_FOCUS_MONITOR_LEFT)),
-            ("focus-monitor-right", "Focus Monitor Right", kVK_ANSI_Period, base,
-             .engine(PWM_COMMAND_FOCUS_MONITOR_RIGHT)),
+            ("focus-next-monitor", "Focus Next Monitor", kVK_ANSI_N, base,
+             .engine(PWM_COMMAND_FOCUS_NEXT_MONITOR)),
             ("move-to-monitor-left", "Move Window to Monitor Left", kVK_ANSI_Comma, shift,
              .engine(PWM_COMMAND_MOVE_TO_MONITOR_LEFT)),
             ("move-to-monitor-right", "Move Window to Monitor Right", kVK_ANSI_Period, shift,

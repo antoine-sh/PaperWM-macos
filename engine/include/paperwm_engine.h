@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-// Number of workspaces; workspace indices run from 0 to PWM_WORKSPACE_COUNT - 1.
+// Number of strips the engine keeps (one per display); indices run from 0 to PWM_WORKSPACE_COUNT - 1.
 #define PWM_WORKSPACE_COUNT 9
 
 typedef enum {
@@ -39,15 +39,7 @@ typedef enum {
     PWM_COMMAND_CENTER = 10,
     PWM_COMMAND_CONSUME = 11,
     PWM_COMMAND_EXPEL = 12,
-    PWM_COMMAND_SWITCH_WORKSPACE = 13,          // arg: workspace index
-    PWM_COMMAND_MOVE_TO_WORKSPACE = 14,         // arg: workspace index
-    PWM_COMMAND_NEXT_WORKSPACE = 15,
-    PWM_COMMAND_PREVIOUS_WORKSPACE = 16,
-    PWM_COMMAND_MOVE_TO_NEXT_WORKSPACE = 17,
-    PWM_COMMAND_MOVE_TO_PREVIOUS_WORKSPACE = 18,
-    PWM_COMMAND_LAST_WORKSPACE = 19,
-    PWM_COMMAND_FOCUS_MONITOR_LEFT = 20,
-    PWM_COMMAND_FOCUS_MONITOR_RIGHT = 21,
+    // 13 to 21 were the workspace and monitor-focus commands.
     PWM_COMMAND_MOVE_TO_MONITOR_LEFT = 22,
     PWM_COMMAND_MOVE_TO_MONITOR_RIGHT = 23,
     PWM_COMMAND_TOGGLE_SCRATCH = 24,
@@ -65,6 +57,7 @@ typedef enum {
     PWM_COMMAND_TALLER = 36,
     PWM_COMMAND_SHORTER = 37,
     PWM_COMMAND_EQUAL_HEIGHTS = 38,
+    PWM_COMMAND_FOCUS_NEXT_MONITOR = 39,
 } PwmCommand;
 
 // Top-left origin, y grows downwards (Accessibility coordinates).

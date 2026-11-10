@@ -21,7 +21,7 @@ struct AppRule: Codable, Equatable, Identifiable {
     enum Action: String, Codable {
         /// Left out of tiling, like dialogs.
         case float
-        /// Opens at a fixed column of a fixed workspace.
+        /// Opens at a fixed column of the strip of the display it appears on.
         case slot
     }
 
@@ -31,8 +31,6 @@ struct AppRule: Codable, Equatable, Identifiable {
     /// Only used to show the app's icon.
     var bundleID: String?
     var action = Action.float
-    /// For `slot`, from 0.
-    var workspace = 0
     /// For `slot`, from 0.
     var column = 0
 }
@@ -48,7 +46,6 @@ final class Settings: ObservableObject {
         var widthStep = 0.1
         /// Fraction of a stacked column's height Make Window Taller and Shorter move.
         var heightStep = 0.1
-        var workspaceNames: [String] = (1...Int(PWM_WORKSPACE_COUNT)).map { String($0) }
         /// Seconds the strip takes to scroll; 0 jumps.
         var animationDuration: Double = 0.25
         var centerFocused: CenterFocus = .never
@@ -81,7 +78,6 @@ final class Settings: ObservableObject {
             widthPresets = try c.decodeIfPresent([Double].self, forKey: .widthPresets) ?? defaults.widthPresets
             widthStep = try c.decodeIfPresent(Double.self, forKey: .widthStep) ?? defaults.widthStep
             heightStep = try c.decodeIfPresent(Double.self, forKey: .heightStep) ?? defaults.heightStep
-            workspaceNames = try c.decodeIfPresent([String].self, forKey: .workspaceNames) ?? defaults.workspaceNames
             animationDuration = try c.decodeIfPresent(Double.self, forKey: .animationDuration)
                 ?? defaults.animationDuration
             centerFocused = try c.decodeIfPresent(CenterFocus.self, forKey: .centerFocused) ?? defaults.centerFocused
@@ -96,7 +92,6 @@ final class Settings: ObservableObject {
             dimAmount = try c.decodeIfPresent(Double.self, forKey: .dimAmount) ?? defaults.dimAmount
             minimapStyle = try c.decodeIfPresent(MinimapStyle.self, forKey: .minimapStyle) ?? defaults.minimapStyle
             appRules = try c.decodeIfPresent([AppRule].self, forKey: .appRules) ?? defaults.appRules
-            workspaceNames += defaults.workspaceNames.dropFirst(workspaceNames.count)
         }
     }
 
@@ -132,7 +127,6 @@ final class Settings: ObservableObject {
         struct Rule: Encodable {
             let app: String
             let action: AppRule.Action
-            let workspace: Int
             let column: Int
         }
         struct Config: Encodable {
@@ -140,7 +134,6 @@ final class Settings: ObservableObject {
             let widthPresets: [Double]
             let widthStep: Double
             let heightStep: Double
-            let workspaceNames: [String]
             let animationDuration: Double
             let centerFocused: CenterFocus
             let appRules: [Rule]
@@ -149,10 +142,10 @@ final class Settings: ObservableObject {
         let encoder = JSONEncoder()
         encoder.keyEncodingStrategy = .convertToSnakeCase
         let rules = values.appRules.map {
-            Rule(app: $0.app, action: $0.action, workspace: $0.workspace, column: $0.column)
+            Rule(app: $0.app, action: $0.action, column: $0.column)
         }
         let config = Config(gap: values.gap, widthPresets: values.widthPresets, widthStep: values.widthStep,
-                            heightStep: values.heightStep, workspaceNames: values.workspaceNames,
+                            heightStep: values.heightStep,
                             animationDuration: values.animationDuration, centerFocused: values.centerFocused,
                             appRules: rules, keepOriginalHeight: values.keepOriginalHeight)
         return (try? encoder.encode(config)).map { String(decoding: $0, as: UTF8.self) } ?? "{}"

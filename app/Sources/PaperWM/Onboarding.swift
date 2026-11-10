@@ -82,7 +82,7 @@ struct OnboardingView: View {
                 feature("rectangle.split.3x1", "Every new window opens as a column to the right of the one you're on.")
                 feature("arrow.left.and.right", "Move along the strip with the keyboard or the trackpad; it slides "
                     + "the window you want into view.")
-                feature("square.grid.3x3", "Nine workspaces per monitor, independent of macOS Spaces: keep "
+                feature("display.2", "One strip per display, independent of macOS Spaces: keep "
                     + "everything on one Space.")
             }
             .padding(.top, 8)
@@ -160,7 +160,7 @@ struct OnboardingView: View {
         Essential(ids: ["focus-left", "focus-right"], title: "Focus the column on the left / right"),
         Essential(ids: ["move-left", "move-right"], title: "Move the column left / right"),
         Essential(ids: ["cycle-width"], title: "Cycle the column's width"),
-        Essential(ids: ["switch-workspace-1"], title: "Switch to workspace 1 (and so on up to 9)"),
+        Essential(ids: ["focus-next-monitor"], title: "Focus the next display"),
         Essential(ids: ["switcher"], title: "Switch windows"),
     ]
 

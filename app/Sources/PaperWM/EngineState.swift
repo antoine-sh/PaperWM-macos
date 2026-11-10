@@ -30,7 +30,6 @@ struct EngineState: Decodable {
     }
 
     struct Workspace: Decodable {
-        let name: String
         let scroll: Double
         let focusedColumn: Int
         let columns: [Column]
@@ -72,11 +71,6 @@ struct EngineState: Decodable {
 
     private enum CodingKeys: String, CodingKey {
         case activeMonitor, gap, monitors, workspaces, windows, mru, scratch, scratchVisible, focusedWindow
-    }
-
-    /// Index of the workspace on the active monitor.
-    var activeWorkspace: Int? {
-        monitors.indices.contains(activeMonitor) ? monitors[activeMonitor].workspace : nil
     }
 
     mutating func indexWindows() {
