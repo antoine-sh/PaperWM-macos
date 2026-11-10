@@ -63,49 +63,36 @@ class Spring:
 
 class Desk:
     def __init__(self):
-        # workspace -> list of columns; a column is [width fraction, [app, ...]]
-        self.ws = {
-            1: [[0.5, ["Safari"]], [1 / 3, ["Terminal"]], [1 / 3, ["Notes"]]],
-            2: [[0.5, ["Mail"]], [0.5, ["Music"]]],
-        }
-        self.cur, self.focus, self.row = 1, {1: 1, 2: 0}, {1: 0, 2: 0}
-        self.scroll = {1: 0.0, 2: 0.0}
+        # the display's strip: a column is [width fraction, [app, ...]]
+        self.strip = [[0.5, ["Safari"]], [1 / 3, ["Terminal"]], [1 / 3, ["Notes"]]]
+        self.focus, self.row, self.scroll = 1, 0, 0.0
         self.springs, self.alpha = {}, {}
         self.key, self.key_t, self.caption = None, -99.0, ""
         self.map_t = -99.0
         self.t = 0.0
         self.layout(snap=True)
 
-    def cols(self):
-        return self.ws[self.cur]
-
-    def targets(self, n):
-        """Window frames for workspace n, keeping its focused column on screen."""
+    def targets(self):
+        """Window frames, keeping the focused column on screen."""
         usable = W - 2 * GAP
-        cols, xs, x = self.ws[n], [], GAP
+        cols, xs, x = self.strip, [], GAP
         for w, _ in cols:
             xs.append(x)
             x += w * usable + GAP
-        f = self.focus[n]
-        left, right = xs[f], xs[f] + cols[f][0] * usable
-        s = self.scroll[n]
-        if left - s < GAP:
-            s = left - GAP
-        elif right - s > W - GAP:
-            s = right - W + GAP
-        self.scroll[n] = s
+        left, right = xs[self.focus], xs[self.focus] + cols[self.focus][0] * usable
+        if left - self.scroll < GAP:
+            self.scroll = left - GAP
+        elif right - self.scroll > W - GAP:
+            self.scroll = right - W + GAP
         out = {}
         for (w, apps), cx in zip(cols, xs):
             h = (BOTTOM - TOP - GAP * (len(apps) - 1)) / len(apps)
             for r, app in enumerate(apps):
-                y = TOP + r * (h + GAP) + (n - self.cur) * H
-                out[app] = [cx - s, y, w * usable, h]
+                out[app] = [cx - self.scroll, TOP + r * (h + GAP), w * usable, h]
         return out
 
     def layout(self, snap=False):
-        self.goal = {}
-        for n in self.ws:
-            self.goal.update(self.targets(n))
+        self.goal = self.targets()
         for app, r in self.goal.items():
             if app not in self.springs or snap:
                 self.springs[app] = Spring(r)
@@ -119,29 +106,28 @@ class Desk:
 
     # commands, mirroring Engine::command
     def focus_col(self, d):
-        f = self.focus[self.cur] + d
-        self.focus[self.cur] = max(0, min(len(self.cols()) - 1, f))
-        self.row[self.cur] = 0
+        self.focus = max(0, min(len(self.strip) - 1, self.focus + d))
+        self.row = 0
         self.nav()
 
     def move_col(self, d):
-        cols, f = self.cols(), self.focus[self.cur]
+        cols, f = self.strip, self.focus
         g = f + d
         if 0 <= g < len(cols):
             cols[f], cols[g] = cols[g], cols[f]
-            self.focus[self.cur] = g
+            self.focus = g
         self.nav()
 
     def cycle_width(self):
         presets = [1 / 3, 0.5, 2 / 3]
-        col = self.cols()[self.focus[self.cur]]
+        col = self.strip[self.focus]
         nxt = [p for p in presets if p > col[0] + 0.01]
         col[0] = nxt[0] if nxt else presets[0]
         self.nav()
 
     def open_window(self, app):
-        self.cols().insert(self.focus[self.cur] + 1, [0.5, [app]])
-        self.focus[self.cur] += 1
+        self.strip.insert(self.focus + 1, [0.5, [app]])
+        self.focus += 1
         self.layout()
         r = self.goal[app]
         self.springs[app] = Spring([r[0] + r[2] * 0.08, r[1] + r[3] * 0.08, r[2] * 0.84, r[3] * 0.84])
@@ -149,18 +135,15 @@ class Desk:
         self.nav()
 
     def consume(self):
-        cols, f = self.cols(), self.focus[self.cur]
+        cols, f = self.strip, self.focus
         if f + 1 < len(cols):
             cols[f][1] += cols.pop(f + 1)[1]
-            self.row[self.cur] = len(cols[f][1]) - 1
+            self.row = len(cols[f][1]) - 1
         self.nav()
 
-    def switch(self, n):
-        self.cur = n
-
     def focused_app(self):
-        col = self.cols()[self.focus[self.cur]]
-        return col[1][min(self.row[self.cur], len(col[1]) - 1)]
+        col = self.strip[self.focus]
+        return col[1][min(self.row, len(col[1]) - 1)]
 
     def tick(self):
         self.layout()
@@ -298,23 +281,17 @@ def render(desk, bg):
     focused = desk.focused_app()
     for app in sorted(desk.springs, key=lambda a: a == focused):
         rect = desk.springs[app].x
-        if rect[1] > H or rect[1] + rect[3] < 0:
-            continue
         layer, pos = window(app, rect, app == focused, desk.alpha[app])
         img.alpha_composite(layer, (max(pos[0], 0), max(pos[1], 0)),
                            (max(-pos[0], 0), max(-pos[1], 0)))
     d = ImageDraw.Draw(img)
 
-    # menu bar with the workspace name, like the app's status item
+    # menu bar
     frosted(img, [0, 0, W * S, MENU * S], 0, (255, 255, 255, 120))
     x = 18 * S
     for i, item in enumerate([focused, "File", "Edit", "View", "Window", "Help"]):
         d.text((x, 6 * S), item, font=UI_BOLD if i == 0 else UI, fill=(25, 25, 30))
         x += d.textlength(item, font=UI_BOLD) + 16 * S
-    label = f"Workspace {desk.cur}"
-    tw = d.textlength(label, font=UI_BOLD)
-    d.rounded_rectangle([W * S - tw - 108 * S, 4 * S, W * S - 92 * S, 22 * S], 5 * S, fill=(30, 30, 40, 200))
-    d.text((W * S - tw - 100 * S, 6 * S), label, font=UI_BOLD, fill=(255, 255, 255))
     d.text((W * S - 80 * S, 6 * S), "Mon 9:41", font=UI, fill=(25, 25, 30))
 
     # dock
@@ -329,7 +306,7 @@ def render(desk, bg):
     age = desk.t - desk.map_t
     a = 1.0 if age < 0.9 else max(0.0, 1 - (age - 0.9) / 0.4)
     if a > 0:
-        cols = desk.cols()
+        cols = desk.strip
         mw = len(cols) * 40 * S + 16 * S
         mx, my = (W * S - mw) / 2, (MENU + 18) * S
         frosted(img, [mx, my, mx + mw, my + 48 * S], 12 * S, (255, 255, 255, 110), a)
@@ -337,7 +314,7 @@ def render(desk, bg):
         od = ImageDraw.Draw(over)
         for i, (_, col_apps) in enumerate(cols):
             cx = mx + 28 * S + i * 40 * S
-            if i == desk.focus[desk.cur]:
+            if i == desk.focus:
                 od.rounded_rectangle([cx - 18 * S, my + 6 * S, cx + 18 * S, my + 42 * S], 8 * S,
                                      fill=(255, 255, 255, 170))
             app_icon(od, cx, my + 24 * S, 26 * S, col_apps[0])
@@ -386,8 +363,6 @@ def main():
         (1.4, ["⌃", "⌥", "R"], "Cycle width", lambda: desk.cycle_width()),
         (1.4, ["⌃", "⌥", "R"], "Cycle width", lambda: desk.cycle_width()),
         (1.4, ["⌃", "⌥", "I"], "Stack next window", lambda: desk.consume()),
-        (1.6, ["⌃", "⌥", "2"], "Workspace 2", lambda: desk.switch(2)),
-        (1.6, ["⌃", "⌥", "1"], "Workspace 1", lambda: desk.switch(1)),
         (1.8, None, "", None),
     ]
     frames = []
