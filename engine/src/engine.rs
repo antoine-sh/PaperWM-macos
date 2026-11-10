@@ -708,9 +708,11 @@ impl Engine {
             // Our own focus request has not landed yet.
         } else {
             self.stale_focus = None;
-            self.system_focus = focused;
+            // A window left focused on a display that just went away must
+            // wait for it there, not be pulled onto another display.
+            let moved = focused != std::mem::replace(&mut self.system_focus, focused);
             if let Some(id) = focused {
-                self.follow_focus(id);
+                self.follow_focus(id, moved);
                 self.touch(id);
             }
         }
@@ -956,21 +958,23 @@ impl Engine {
         if !self.workspaces.iter().any(|w| w.contains(id)) {
             return false;
         }
-        self.follow_focus(id);
+        self.follow_focus(id, true);
         raise.push(id);
         true
     }
 
     /// Makes the display showing `id` active and focuses `id` there. A
     /// window on the hidden strip of a display that went away moves next to
-    /// the active display's focused column instead.
-    fn follow_focus(&mut self, id: WindowId) {
+    /// the active display's focused column if `bring` is set, and is left
+    /// alone otherwise.
+    fn follow_focus(&mut self, id: WindowId, bring: bool) {
         let Some(workspace) = self.workspaces.iter().position(|w| w.contains(id)) else { return };
         let workspace = match self.monitors.iter().position(|m| m.workspace == workspace) {
             Some(monitor) => {
                 self.active = monitor;
                 workspace
             }
+            None if !bring => return,
             None => {
                 let target = self.monitors[self.active].workspace;
                 let ws = &self.workspaces[workspace];
@@ -1799,6 +1803,23 @@ mod tests {
         backend.set_focused(Some(1));
         engine.sync().unwrap();
         assert_eq!(engine.state().active_monitor, 0);
+    }
+
+    #[test]
+    fn window_focused_when_its_display_drops_out_stays_with_it() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 1200.0, 300.0)]);
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
+        engine.sync().unwrap();
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        // Waking from sleep: macOS still reports window 2 focused meanwhile.
+        engine.set_monitors(&[(1, SCREEN)]).unwrap();
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1]]);
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
+        engine.sync().unwrap();
+        assert_eq!(engine.workspace(1).unwrap().columns()[0].windows(), &[2]);
+        assert!(backend.frame_of(2).unwrap().x >= RIGHT.x);
     }
 
     #[test]

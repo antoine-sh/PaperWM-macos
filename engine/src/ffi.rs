@@ -540,8 +540,12 @@ mod tests {
         for (name, command) in commands {
             assert_eq!(Command::parse(value(&format!("PWM_COMMAND_{name}")), 1.0), Some(command), "{name}");
         }
-        let next = commands.iter().map(|(name, _)| value(&format!("PWM_COMMAND_{name}"))).max().unwrap() + 1;
-        assert_eq!(Command::parse(next, 1.0), None, "a command is missing from the header");
+        let codes: Vec<u32> = commands.iter().map(|(name, _)| value(&format!("PWM_COMMAND_{name}"))).collect();
+        for code in 0..=codes.iter().max().unwrap() + 1 {
+            if !codes.contains(&code) {
+                assert_eq!(Command::parse(code, 1.0), None, "command {code} is missing from the header");
+            }
+        }
         let statuses = [
             ("OK", PwmStatus::Ok),
             ("NOT_TRUSTED", PwmStatus::NotTrusted),

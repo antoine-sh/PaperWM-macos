@@ -104,7 +104,7 @@ void pwm_window_list_free(PwmWindowList list);
 const char *pwm_last_error(void);
 
 // Display id (CGDirectDisplayID) and usable area (Accessibility coordinates)
-// of each monitor, main one first. Each display keeps its workspace by id.
+// of each monitor, main one first. Each display keeps its strip by id.
 PwmStatus pwm_engine_set_monitors(PwmEngine *engine, const uint32_t *ids, const PwmRect *areas, size_t count);
 
 // Brings the layout up to date with the current windows and focus.
@@ -139,10 +139,10 @@ void pwm_engine_note_transition(const PwmEngine *engine);
 // nothing notifies, so call it then; negative if no window is waiting.
 double pwm_engine_next_check(const PwmEngine *engine);
 
-// Settings as JSON: {"gap": 8, "width_presets": [0.33, 0.5], "workspace_names": ["1", ...],
+// Settings as JSON: {"gap": 8, "width_presets": [0.33, 0.5],
 // "animation_duration": 0.25, "center_focused": "never" | "on_overflow" | "always",
 // "app_rules": [{"app": "Calculator", "action": "float"},
-//               {"app": "Mail", "action": "slot", "workspace": 1, "column": 0}]}.
+//               {"app": "Mail", "action": "slot", "column": 0}]}.
 // Missing fields keep their defaults; malformed JSON returns INVALID_ARGUMENT.
 PwmStatus pwm_engine_set_config(PwmEngine *engine, const char *json);
 
