@@ -123,6 +123,8 @@ pub enum Command {
     Consume,
     /// Push the focused window out into its own column.
     Expel,
+    /// Give every window of the focused column its own column.
+    Unstack,
     MoveToMonitorLeft,
     MoveToMonitorRight,
     ToggleScratch,
@@ -191,6 +193,7 @@ impl Command {
             37 => Shorter,
             38 => EqualHeights,
             39 => FocusNextMonitor,
+            40 => Unstack,
             _ => return None,
         })
     }
@@ -800,6 +803,7 @@ impl Engine {
                 }
                 changed
             }
+            Command::Unstack => ws.unstack(),
             Command::Center => {
                 ws.center_focused(viewport, gap);
                 true
@@ -1530,6 +1534,11 @@ mod tests {
         assert_eq!(columns(&engine), vec![vec![1], vec![3, 2]]);
         engine.command(Command::FocusDown).unwrap();
         engine.command(Command::Expel).unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![2]]);
+        engine.command(Command::FocusFirst).unwrap();
+        engine.command(Command::Consume).unwrap();
+        engine.command(Command::Consume).unwrap();
+        assert_eq!(engine.command(Command::Unstack), Ok(true));
         assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![2]]);
     }
 

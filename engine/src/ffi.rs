@@ -536,6 +536,7 @@ mod tests {
             ("SHORTER", Command::Shorter),
             ("EQUAL_HEIGHTS", Command::EqualHeights),
             ("FOCUS_NEXT_MONITOR", Command::FocusNextMonitor),
+            ("UNSTACK", Command::Unstack),
         ];
         for (name, command) in commands {
             assert_eq!(Command::parse(value(&format!("PWM_COMMAND_{name}")), 1.0), Some(command), "{name}");

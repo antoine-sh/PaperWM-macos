@@ -46,6 +46,12 @@ impl Column {
         }
     }
 
+    /// A new column for `window` taken out of this one, at its width, still
+    /// able to leave full width.
+    fn split(&self, window: WindowId) -> Self {
+        Self { width_before_full: self.width_before_full, ..Self::new(window, self.width) }
+    }
+
     pub fn windows(&self) -> &[WindowId] {
         &self.windows
     }
@@ -330,9 +336,30 @@ impl Workspace {
         let window = column.windows.remove(column.focused_row);
         column.heights.clear();
         column.focused_row = column.focused_row.min(column.windows.len() - 1);
-        let width = column.width;
-        self.columns.insert(self.focused + 1, Column::new(window, width));
+        let column = column.split(window);
+        self.columns.insert(self.focused + 1, column);
         self.focused += 1;
+        self.keep_pins_at_edges();
+        true
+    }
+
+    /// Splits the focused column into one column per window, at its width,
+    /// keeping the focused window focused. The first window keeps the column
+    /// and its pin, so under a right pin it ends up after the others; the
+    /// stack's tabs and heights go away.
+    pub fn unstack(&mut self) -> bool {
+        let Some(column) = self.columns.get_mut(self.focused) else { return false };
+        if column.windows.len() < 2 {
+            return false;
+        }
+        let rest: Vec<Column> = column.windows.split_off(1).into_iter().map(|w| column.split(w)).collect();
+        let row = column.focused_row;
+        column.focused_row = 0;
+        column.heights.clear();
+        column.tabbed = false;
+        let at = self.focused + 1;
+        self.columns.splice(at..at, rest);
+        self.focused += row;
         self.keep_pins_at_edges();
         true
     }
@@ -787,6 +814,52 @@ mod tests {
         assert!(ws.toggle_tabbed());
         assert!(!ws.columns()[0].is_tabbed());
         assert!(!Workspace::default().toggle_tabbed());
+    }
+
+    #[test]
+    fn unstack_gives_every_window_of_the_column_its_own_column() {
+        let mut ws = workspace(&[300.0, 400.0, 500.0, 600.0]);
+        ws.focus_window(1);
+        ws.consume();
+        ws.consume();
+        ws.toggle_tabbed();
+        ws.focus_window(2);
+        assert!(ws.unstack());
+        assert_eq!(layout(&ws), vec![vec![1], vec![2], vec![3], vec![4]]);
+        assert_eq!(ws.focused_window(), Some(2));
+        assert!(ws.columns()[..3].iter().all(|c| c.width() == 300.0 && !c.is_tabbed()));
+        assert!(!ws.unstack());
+
+        // A right-pinned stack keeps its pin on the first window, at the right edge.
+        let mut ws = workspace(&[300.0, 300.0, 300.0, 300.0]);
+        ws.focus_window(2);
+        ws.consume();
+        ws.consume();
+        assert!(ws.toggle_pin(Pin::Right, VIEW, 0.0));
+        ws.focus_window(3);
+        assert!(ws.unstack());
+        assert_eq!(layout(&ws), vec![vec![1], vec![3], vec![4], vec![2]]);
+        assert_eq!(ws.focused_window(), Some(3));
+        assert_eq!(ws.columns()[3].pinned(), Some(Pin::Right));
+    }
+
+    #[test]
+    fn windows_leaving_a_full_width_stack_can_still_leave_full_width() {
+        let mut ws = workspace(&[300.0, 400.0, 500.0]);
+        ws.focus_window(1);
+        ws.consume();
+        ws.consume();
+        ws.toggle_full_width(VIEW);
+        ws.focus_window(3);
+        assert!(ws.expel());
+        assert!(ws.toggle_full_width(VIEW));
+        assert_eq!(ws.columns()[1].width(), 300.0);
+        ws.focus_window(1);
+        assert!(ws.unstack());
+        assert!(ws.columns()[..2].iter().all(|c| c.width() == VIEW));
+        ws.focus_window(2);
+        assert!(ws.toggle_full_width(VIEW));
+        assert_eq!(ws.columns()[1].width(), 300.0);
     }
 
     #[test]

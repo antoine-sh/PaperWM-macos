@@ -58,6 +58,7 @@ typedef enum {
     PWM_COMMAND_SHORTER = 37,
     PWM_COMMAND_EQUAL_HEIGHTS = 38,
     PWM_COMMAND_FOCUS_NEXT_MONITOR = 39,
+    PWM_COMMAND_UNSTACK = 40,
 } PwmCommand;
 
 // Top-left origin, y grows downwards (Accessibility coordinates).
