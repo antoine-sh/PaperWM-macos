@@ -17,12 +17,14 @@ use crate::backend::WindowId;
 pub const GRACE: Duration = Duration::from_secs(5);
 
 /// What one read showed. `absent` holds windows whose element answered but
-/// that were not listed. A window neither listed nor absent was not looked
-/// at or its app was busy; its clock starts over when it is absent again, so
-/// the backend must look at every window [`Absence::is_counting`] each read.
+/// that were not listed, `unanswered` windows whose busy app could not say;
+/// their clock starts over, so a due verdict cannot keep the app re-syncing.
+/// Windows in none of these were not looked at and keep their clock; the
+/// backend must look at each window [`Absence::is_due`].
 pub struct Read<'a> {
     pub listed: &'a [WindowId],
     pub absent: &'a [WindowId],
+    pub unanswered: &'a [WindowId],
     /// Every standard window still known, listed or not. A read listing
     /// fewer than half of them is not on their Space: another Space, a
     /// fullscreen Space, the lock screen, a wake. Must include `listed`.
@@ -62,7 +64,8 @@ impl Absence {
             _ => None,
         };
         self.listed_at.retain(|id, _| read.known.contains(id));
-        self.absent_since.retain(|id, _| read.absent.contains(id));
+        self.absent_since
+            .retain(|id, _| read.known.contains(id) && !read.listed.contains(id) && !read.unanswered.contains(id));
         for &id in read.listed {
             self.listed_at.insert(id, now);
         }
@@ -83,6 +86,12 @@ impl Absence {
     /// Whether `id` is absent and on its way to counting as closed.
     pub fn is_counting(&self, id: WindowId) -> bool {
         self.absent_since.contains_key(&id)
+    }
+
+    /// Whether `id` would count as closed if found absent now, so it must be
+    /// looked at; counting windows that are not due need not be.
+    pub fn is_due(&self, id: WindowId, now: Instant) -> bool {
+        self.absent_since.get(&id).and_then(|&since| self.matures(id, since)).is_some_and(|at| at <= now)
     }
 
     /// How long until the next absent window could count as closed, if any
@@ -110,7 +119,7 @@ mod tests {
     const SECOND: Duration = Duration::from_secs(1);
 
     fn read<'a>(listed: &'a [WindowId], absent: &'a [WindowId], transition: bool) -> Read<'a> {
-        Read { listed, absent, known: KNOWN, transition }
+        Read { listed, absent, unanswered: &[], known: KNOWN, transition }
     }
 
     #[test]
@@ -171,12 +180,23 @@ mod tests {
     }
 
     #[test]
+    fn windows_not_looked_at_keep_their_clock() {
+        let mut absence = Absence::default();
+        let t = Instant::now();
+        absence.update(&read(&[1, 2, 3], &[], false), t);
+        absence.update(&read(&[1, 2], &[3], false), t + SECOND);
+        assert!(!absence.is_due(3, t + 2 * SECOND));
+        assert!(absence.update(&read(&[1, 2], &[], false), t + 2 * SECOND).is_empty());
+        assert_eq!(absence.update(&read(&[1, 2], &[3], false), t + SECOND + GRACE), vec![3]);
+    }
+
+    #[test]
     fn a_lone_window_closed_to_the_background_still_closes() {
         let mut absence = Absence::default();
         let t = Instant::now();
         let known = &[1];
-        absence.update(&Read { listed: &[1], absent: &[], known, transition: false }, t);
-        let gone = Read { listed: &[], absent: &[1], known, transition: false };
+        absence.update(&Read { listed: &[1], absent: &[], unanswered: &[], known, transition: false }, t);
+        let gone = Read { listed: &[], absent: &[1], unanswered: &[], known, transition: false };
         assert!(absence.update(&gone, t + SECOND).is_empty());
         assert_eq!(absence.update(&gone, t + SECOND + GRACE), vec![1]);
     }
@@ -188,8 +208,10 @@ mod tests {
         absence.update(&read(&[1, 2, 3], &[], false), t);
         absence.update(&read(&[1, 2], &[3], false), t + SECOND);
         assert!(absence.is_counting(3));
+        assert!(absence.is_due(3, t + SECOND + GRACE));
         // Its app was busy this time.
-        assert!(absence.update(&read(&[1, 2], &[], false), t + 2 * GRACE).is_empty());
+        let busy = Read { unanswered: &[3], ..read(&[1, 2], &[], false) };
+        assert!(absence.update(&busy, t + 2 * GRACE).is_empty());
         assert!(!absence.is_counting(3));
         assert_eq!(absence.next_check(t + 2 * GRACE), None);
         assert!(absence.update(&read(&[1, 2], &[3], false), t + 2 * GRACE + SECOND).is_empty());

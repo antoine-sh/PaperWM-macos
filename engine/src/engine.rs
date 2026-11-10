@@ -910,8 +910,6 @@ impl Engine {
         Ok(changed)
     }
 
-    /// Whether the last sync met a window still being created, so the
-    /// caller should sync again shortly: macOS does not say when it is done.
     /// See [`WindowBackend::note_transition`].
     pub fn note_transition(&self) {
         self.backend.note_transition();
@@ -923,6 +921,8 @@ impl Engine {
         self.backend.next_check().map(|d| d.as_secs_f64())
     }
 
+    /// Whether the last sync met a window still being created, so the
+    /// caller should sync again shortly: macOS does not say when it is done.
     pub fn is_settling(&self) -> bool {
         self.settling
     }

@@ -39,6 +39,9 @@ final class WindowManager {
     private let log = Logger(subsystem: "io.github.antoine-sh.PaperWM", category: "windows")
     /// Bumped by each sync, so only the latest scheduled recheck runs.
     private var recheckGeneration = 0
+    /// The least wait before a recheck, doubled while a window stays due
+    /// (its app busy, or syncs failing) so the rechecks back off.
+    private var recheckFloor = 0.5
     /// When each distinct error was last logged, to keep repeats out of the log.
     private var lastLogged: [String: CFTimeInterval] = [:]
     /// Each wake notification, with the sleep notification it ends. Windows
@@ -199,10 +202,14 @@ final class WindowManager {
     /// nothing notifies then.
     private func recheck() {
         recheckGeneration += 1
-        guard let delay = engine.nextCheck else { return }
+        guard let delay = engine.nextCheck else {
+            recheckFloor = 0.5
+            return
+        }
+        let wait = max(delay + 0.05, recheckFloor)
+        recheckFloor = delay < 0.05 ? min(recheckFloor * 2, 8) : 0.5
         let generation = recheckGeneration
-        // At least a moment apart, should the window stay due.
-        DispatchQueue.main.asyncAfter(deadline: .now() + max(delay + 0.05, 0.5)) { [weak self] in
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait) { [weak self] in
             MainActor.assumeIsolated {
                 guard let self, self.recheckGeneration == generation else { return }
                 self.scheduleSync()

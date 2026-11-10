@@ -79,6 +79,8 @@ pub struct AxBackend {
     is_settling: Cell<bool>,
     /// The last read's summary line, logged again only when it changes.
     last_summary: RefCell<String>,
+    /// Each app's lagging windows last logged, so a lasting lag logs once.
+    last_lagging: RefCell<HashMap<i32, Vec<WindowId>>>,
     /// Application elements, kept between calls.
     apps: RefCell<HashMap<i32, AxElement>>,
     /// Declared before `handler` so observers are torn down first.
@@ -241,6 +243,7 @@ impl WindowBackend for AxBackend {
                     // Nothing was read: keep every handle, and read everything next time.
                     drop(observers);
                     *self.elements.borrow_mut() = previous;
+                    self.transition.set(transition);
                     self.handler.everything.set(true);
                     return Err(BackendError::NotTrusted);
                 }
@@ -359,12 +362,19 @@ impl WindowBackend for AxBackend {
             // A known window on screen that its app does not list: Accessibility
             // already shows another Space while the window server does not, as
             // during a Space or fullscreen animation. Read the app again next time.
-            let lagging: Vec<WindowId> =
-                ids.iter().copied().filter(|id| previous.contains_key(id) && !in_list.contains(id)).collect();
-            if !lagging.is_empty() {
-                log::line(format!("backend: {app_name} does not list on-screen windows {lagging:?}"));
+            // One missing while others are listed is that window closing.
+            let known_on_screen: Vec<WindowId> = ids.iter().copied().filter(|id| previous.contains_key(id)).collect();
+            let lagging = !known_on_screen.is_empty() && known_on_screen.iter().all(|id| !in_list.contains(id));
+            let mut last_lagging = self.last_lagging.borrow_mut();
+            if lagging {
+                if last_lagging.get(&pid) != Some(&known_on_screen) {
+                    log::line(format!("backend: {app_name} does not list on-screen windows {known_on_screen:?}"));
+                    last_lagging.insert(pid, known_on_screen);
+                }
                 transition = true;
                 complete = false;
+            } else {
+                last_lagging.remove(&pid);
             }
             if complete {
                 seen.insert(pid, ids);
@@ -375,6 +385,10 @@ impl WindowBackend for AxBackend {
         let tabs: BTreeSet<WindowId> = windows.iter().flat_map(|(_, w)| w.tabs.iter().copied()).collect();
         let mut hidden_apps = HashMap::new();
         let mut absent = Vec::new();
+        let mut unanswered = Vec::new();
+        // Windows in fullscreen on another Space: not listed there, but keeping their column.
+        let mut fullscreen_away = BTreeSet::new();
+        let now = Instant::now();
         let mut absence = self.absence.borrow_mut();
         for (id, mut cached) in previous {
             if elements.contains_key(&id) {
@@ -385,11 +399,21 @@ impl WindowBackend for AxBackend {
                 continue;
             }
             let pid = cached.pid;
-            let look = !busy.contains(&id)
-                && !self.is_stalled(pid)
-                && (read_apps.contains(&pid) || everything || changed.contains(&pid) || absence.is_counting(id));
+            // Windows on their way to closing are only asked again once due,
+            // unless their app notified; others when their app was read or
+            // left the screen (closed to the background, say).
+            let wanted = if absence.is_counting(id) {
+                absence.is_due(id, now)
+            } else {
+                read_apps.contains(&pid) || (seen.contains_key(&pid) && !present_apps.contains(&pid))
+            };
+            let look = !busy.contains(&id) && !self.is_stalled(pid) && (wanted || everything || changed.contains(&pid));
+            if busy.contains(&id) {
+                unanswered.push(id);
+            }
             if look {
-                match self.timed(pid, || cached.element.values(&[kAXSubroleAttribute, kAXMinimizedAttribute])) {
+                let probe = [kAXSubroleAttribute, kAXMinimizedAttribute, FULL_SCREEN_ATTRIBUTE];
+                match self.timed(pid, || cached.element.values(&probe)) {
                     Err(err) if err == kAXErrorInvalidUIElement => {
                         self.depart(id, &cached, Departure::Destroyed);
                         continue;
@@ -402,6 +426,12 @@ impl WindowBackend for AxBackend {
                         self.depart(id, &cached, Departure::AppHidden);
                         continue;
                     }
+                    Ok(values) if values.get(2).and_then(Option::as_ref).and_then(as_bool) == Some(true) => {
+                        cached.is_fullscreen = true;
+                        fullscreen_away.insert(id);
+                    }
+                    // The engine never manages other windows; one ordered out is just forgotten.
+                    Ok(_) if !cached.is_standard => continue,
                     Ok(_) => {
                         if cached.was_reported {
                             let why = if read_apps.contains(&pid) {
@@ -414,12 +444,10 @@ impl WindowBackend for AxBackend {
                             log::line(format!("backend: {id} {} away: {why}", cached.app_name));
                         }
                         cached.was_reported = false;
-                        if cached.is_standard {
-                            absent.push(id);
-                        }
+                        absent.push(id);
                     }
                     // Busy: it stays as it is.
-                    Err(_) => {}
+                    Err(_) => unanswered.push(id),
                 }
             }
             elements.insert(id, cached);
@@ -427,10 +455,17 @@ impl WindowBackend for AxBackend {
         let known: Vec<WindowId> = elements.iter().filter(|(_, c)| c.is_standard).map(|(&id, _)| id).collect();
         // Windows of apps not read are there if the window server shows them.
         let reported: BTreeSet<WindowId> = windows.iter().map(|(_, w)| w.id).collect();
-        let present: Vec<WindowId> =
-            known.iter().copied().filter(|id| reported.contains(id) || on_screen.contains_key(id)).collect();
-        let read = Read { listed: &present, absent: &absent, known: &known, transition };
-        for id in absence.update(&read, Instant::now()) {
+        let present: Vec<WindowId> = known
+            .iter()
+            .copied()
+            .filter(|id| {
+                reported.contains(id)
+                    || fullscreen_away.contains(id)
+                    || (on_screen.contains_key(id) && !absent.contains(id))
+            })
+            .collect();
+        let read = Read { listed: &present, absent: &absent, unanswered: &unanswered, known: &known, transition };
+        for id in absence.update(&read, now) {
             if let Some(cached) = elements.remove(&id) {
                 self.depart(id, &cached, Departure::Closed);
             }
@@ -438,7 +473,8 @@ impl WindowBackend for AxBackend {
         drop(absence);
 
         // Apps with a window still being created are read again next time.
-        let unread: Vec<i32> = elements.values().map(|c| c.pid).filter(|pid| !read_apps.contains(pid)).collect();
+        let unread: BTreeSet<i32> = elements.values().map(|c| c.pid).filter(|pid| !read_apps.contains(pid)).collect();
+        let unread: Vec<i32> = unread.into_iter().collect();
         let settling = self.settling.borrow_mut().update(&listed, &unread, Instant::now());
         self.is_settling.set(!settling.is_empty());
         // Forget apps that left the screen, so they are read when they return.
@@ -447,9 +483,8 @@ impl WindowBackend for AxBackend {
             observer.retain_windows(|id| elements.contains_key(&id));
         }
         let summary = format!(
-            "backend: {} windows on screen; read {} apps; reported {}, away {}, known {}{}",
+            "backend: {} windows on screen; reported {}, away {}, known {}{}",
             on_screen.len(),
-            read_apps.len(),
             windows.len(),
             absent.len(),
             known.len(),
