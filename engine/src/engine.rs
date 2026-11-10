@@ -1822,6 +1822,91 @@ mod tests {
         assert!(backend.frame_of(2).unwrap().x >= RIGHT.x);
     }
 
+    /// Engine with window 1 on the main display and 2 and 3 on the right
+    /// one, which is active with 2 focused.
+    fn engine_with_right_display() -> (Engine, Rc<MockBackend>) {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 1100.0, 300.0), window(3, 1500.0, 300.0)]);
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
+        engine.sync().unwrap();
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        (engine, backend)
+    }
+
+    fn columns_of(engine: &Engine, strip: usize) -> Vec<Vec<WindowId>> {
+        engine.workspace(strip).unwrap().columns().iter().map(|c| c.windows().to_vec()).collect()
+    }
+
+    #[test]
+    fn focused_tab_of_an_unplugged_display_leaves_the_rest_of_its_column() {
+        let (mut engine, backend) = engine_with_right_display();
+        assert_eq!(engine.command(Command::Consume), Ok(true));
+        assert_eq!(engine.command(Command::ToggleTabbed), Ok(true));
+        assert_eq!(columns_of(&engine, 1), vec![vec![2, 3]]);
+        let width = engine.workspace(1).unwrap().columns()[0].width();
+
+        engine.set_monitors(&[(1, SCREEN)]).unwrap();
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        // The window takes its column's width along, in a column of its own.
+        assert_eq!(columns(&engine), vec![vec![1], vec![3]]);
+        assert_eq!(widths(&engine)[1], width);
+        assert!(!engine.workspace(0).unwrap().columns()[1].is_tabbed());
+        assert_eq!(columns_of(&engine, 1), vec![vec![2]]);
+        assert!(is_hidden(backend.frame_of(2).unwrap()));
+        assert!(!is_hidden(backend.frame_of(3).unwrap()));
+    }
+
+    #[test]
+    fn pinned_window_of_an_unplugged_display_comes_in_unpinned() {
+        let (mut engine, backend) = engine_with_right_display();
+        assert_eq!(engine.command(Command::TogglePinLeft), Ok(true));
+        let width = engine.workspace(1).unwrap().columns()[0].width();
+
+        engine.set_monitors(&[(1, SCREEN)]).unwrap();
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+        assert_eq!(widths(&engine)[1], width);
+        assert_eq!(engine.workspace(0).unwrap().columns()[1].pinned(), None);
+        assert_eq!(columns_of(&engine, 1), vec![vec![3]]);
+    }
+
+    #[test]
+    fn switcher_brings_a_window_of_an_unplugged_display_onto_an_empty_strip() {
+        let (mut engine, backend) = engine_with(vec![window(2, 1200.0, 300.0)]);
+        engine.set_monitors(&[(1, SCREEN), (2, RIGHT)]).unwrap();
+        engine.sync().unwrap();
+        engine.set_monitors(&[(1, SCREEN)]).unwrap();
+        assert!(engine.workspace(0).unwrap().is_empty());
+
+        assert_eq!(engine.command(Command::FocusWindow(2)), Ok(true));
+        assert_eq!(columns(&engine), vec![vec![2]]);
+        assert!(engine.workspace(1).unwrap().is_empty());
+        assert_eq!(backend.focused_window(), Some(2));
+        assert_eq!(backend.frame_of(2).unwrap().x, 8.0);
+    }
+
+    #[test]
+    fn single_display_changing_id_keeps_its_strip_on_screen() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0)]);
+        engine.sync().unwrap();
+        let frames = (backend.frame_of(1), backend.frame_of(2));
+        // In one call, as after sleep, and again with no display in between.
+        engine.set_monitors(&[(2, SCREEN)]).unwrap();
+        assert_eq!(shown(&engine), vec![0]);
+        engine.sync().unwrap();
+        assert_eq!((backend.frame_of(1), backend.frame_of(2)), frames);
+        engine.set_monitors(&[(3, SCREEN)]).unwrap();
+        engine.sync().unwrap();
+        assert_eq!(shown(&engine), vec![0]);
+        assert_eq!(columns(&engine), vec![vec![1], vec![2]]);
+        assert_eq!((backend.frame_of(1), backend.frame_of(2)), frames);
+    }
+
     #[test]
     fn closed_window_of_an_unplugged_display_is_forgotten() {
         let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 1200.0, 300.0)]);
