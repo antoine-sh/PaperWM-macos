@@ -337,6 +337,26 @@ impl Workspace {
         true
     }
 
+    /// Splits the focused column into one column per window, in order and at
+    /// its width, keeping the focused window focused. The first window keeps
+    /// the column and its pin; the stack's tabs and heights go away.
+    pub fn unstack(&mut self) -> bool {
+        let Some(column) = self.columns.get_mut(self.focused) else { return false };
+        if column.windows.len() < 2 {
+            return false;
+        }
+        let rest = column.windows.split_off(1);
+        let (row, width) = (column.focused_row, column.width);
+        column.focused_row = 0;
+        column.heights.clear();
+        column.tabbed = false;
+        let at = self.focused + 1;
+        self.columns.splice(at..at, rest.into_iter().map(|w| Column::new(w, width)));
+        self.focused += row;
+        self.keep_pins_at_edges();
+        true
+    }
+
     /// Pins the focused column to `pin`'s edge in place of any column pinned
     /// there, or unpins it if it is already there. Refused when the pins
     /// would leave the strip less than a minimum-width column.
@@ -787,6 +807,21 @@ mod tests {
         assert!(ws.toggle_tabbed());
         assert!(!ws.columns()[0].is_tabbed());
         assert!(!Workspace::default().toggle_tabbed());
+    }
+
+    #[test]
+    fn unstack_gives_every_window_of_the_column_its_own_column() {
+        let mut ws = workspace(&[300.0, 400.0, 500.0, 600.0]);
+        ws.focus_window(1);
+        ws.consume();
+        ws.consume();
+        ws.toggle_tabbed();
+        ws.focus_window(2);
+        assert!(ws.unstack());
+        assert_eq!(layout(&ws), vec![vec![1], vec![2], vec![3], vec![4]]);
+        assert_eq!(ws.focused_window(), Some(2));
+        assert!(ws.columns()[..3].iter().all(|c| c.width() == 300.0 && !c.is_tabbed()));
+        assert!(!ws.unstack());
     }
 
     #[test]

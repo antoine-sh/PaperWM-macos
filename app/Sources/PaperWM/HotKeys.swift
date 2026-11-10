@@ -65,6 +65,7 @@ struct HotKey {
         case monitors = "Monitors"
         case size = "Size"
         case layout = "Column Layout"
+        case stack = "Stack"
         case switcher = "Switcher and Scratch Layer"
         case appearance = "Appearance"
     }
@@ -131,11 +132,14 @@ struct HotKey {
         ])
         add(.layout, [
             ("center", "Center Column", kVK_ANSI_C, base, .engine(PWM_COMMAND_CENTER)),
-            ("consume", "Pull Next Window into Column", kVK_ANSI_I, base, .engine(PWM_COMMAND_CONSUME)),
-            ("expel", "Push Window out of Column", kVK_ANSI_O, base, .engine(PWM_COMMAND_EXPEL)),
-            ("toggle-tabbed", "Toggle Tabbed Column", kVK_ANSI_T, base, .engine(PWM_COMMAND_TOGGLE_TABBED)),
             ("pin-left", "Pin Column to Left Edge", kVK_ANSI_P, base, .engine(PWM_COMMAND_TOGGLE_PIN_LEFT)),
             ("pin-right", "Pin Column to Right Edge", kVK_ANSI_P, shift, .engine(PWM_COMMAND_TOGGLE_PIN_RIGHT)),
+        ])
+        add(.stack, [
+            ("consume", "Stack Next Window onto Column", kVK_ANSI_S, base, .engine(PWM_COMMAND_CONSUME)),
+            ("unstack", "Unstack Column", kVK_ANSI_S, shift, .engine(PWM_COMMAND_UNSTACK)),
+            ("expel", "Remove Window from Stack", kVK_ANSI_O, base, .engine(PWM_COMMAND_EXPEL)),
+            ("toggle-tabbed", "Toggle Tabbed Stack", kVK_ANSI_T, base, .engine(PWM_COMMAND_TOGGLE_TABBED)),
         ])
         add(.switcher, [
             ("switcher", "Switch Windows", kVK_Tab, base, .switcher(forward: true)),
