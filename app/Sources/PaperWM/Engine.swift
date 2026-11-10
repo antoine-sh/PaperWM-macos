@@ -85,6 +85,13 @@ final class Engine {
         }
     }
 
+    /// Diagnostic lines the engine logged since the last call, oldest first.
+    static func takeLog() -> [String] {
+        guard let text = pwm_take_log() else { return [] }
+        defer { pwm_string_free(text) }
+        return String(cString: text).split(separator: "\n").map(String.init)
+    }
+
     /// Display id and usable area of each monitor in Accessibility
     /// coordinates, main one first. The engine keeps workspaces by display id.
     func setMonitors(_ screens: [NSScreen]) throws {
@@ -129,6 +136,19 @@ final class Engine {
     /// Whether the last sync met a window still being created, so another
     /// sync should follow shortly.
     var isSettling: Bool { pwm_engine_is_settling(handle) }
+
+    /// Tells the engine the screen empties for a while (a Space change, sleep,
+    /// wake, lock), so windows missing meanwhile are taken for away.
+    func noteTransition() {
+        pwm_engine_note_transition(handle)
+    }
+
+    /// Seconds until a sync may find a missing window closed though nothing
+    /// notifies, or nil if none is waiting for that.
+    var nextCheck: Double? {
+        let seconds = pwm_engine_next_check(handle)
+        return seconds < 0 ? nil : seconds
+    }
 
     private static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()

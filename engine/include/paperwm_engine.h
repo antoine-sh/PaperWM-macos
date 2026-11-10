@@ -137,6 +137,15 @@ bool pwm_engine_is_animating(const PwmEngine *engine);
 // should be called again shortly.
 bool pwm_engine_is_settling(const PwmEngine *engine);
 
+// Notes something that empties the screen for a while (a Space change, sleep,
+// wake, lock, unlock, a display change), so windows missing meanwhile are
+// taken for away rather than closed.
+void pwm_engine_note_transition(const PwmEngine *engine);
+
+// Seconds until pwm_engine_sync may find a missing window closed though
+// nothing notifies, so call it then; negative if no window is waiting.
+double pwm_engine_next_check(const PwmEngine *engine);
+
 // Settings as JSON: {"gap": 8, "width_presets": [0.33, 0.5], "workspace_names": ["1", ...],
 // "animation_duration": 0.25, "center_focused": "never" | "on_overflow" | "always",
 // "app_rules": [{"app": "Calculator", "action": "float"},
@@ -148,6 +157,11 @@ PwmStatus pwm_engine_set_config(PwmEngine *engine, const char *json);
 // pwm_string_free.
 char *pwm_engine_state_json(const PwmEngine *engine);
 void pwm_string_free(char *string);
+
+// Diagnostic lines logged since the last call (why windows joined or left the
+// layout, what each read saw), separated by newlines, or null when there are
+// none. Free with pwm_string_free.
+char *pwm_take_log(void);
 
 // Start or stop watching an app's windows for changes.
 void pwm_engine_observe_app(const PwmEngine *engine, int32_t pid);

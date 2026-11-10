@@ -39,6 +39,35 @@ impl WindowInfo {
     }
 }
 
+/// Why a window reported before has left for good. A window that is merely
+/// missing from a read (another Space, a busy app, the lock screen) has not
+/// departed and keeps its place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Departure {
+    /// Its Accessibility element is no longer valid.
+    Destroyed,
+    AppQuit,
+    /// Its app was hidden (⌘H).
+    AppHidden,
+    /// Minimized while its app had nothing on screen, so it was not listed.
+    Minimized,
+    /// Its element still answers, but it stayed away with nothing to explain
+    /// it, as apps that close to the background leave their windows.
+    Closed,
+}
+
+impl fmt::Display for Departure {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Destroyed => "destroyed",
+            Self::AppQuit => "app quit",
+            Self::AppHidden => "app hidden",
+            Self::Minimized => "minimized",
+            Self::Closed => "closed: away with nothing to explain it",
+        })
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum BackendError {
     /// The app has not been granted Accessibility permission.
@@ -65,15 +94,28 @@ pub trait WindowBackend {
     /// Whether the process may control other apps' windows.
     fn is_trusted(&self) -> bool;
 
-    /// All windows of regular apps on the current Space, front to back.
-    /// Background tabs are left out and listed in their shown tab's `tabs`.
+    /// Windows of regular apps read now, front to back: on the current
+    /// Space, minimized, or in fullscreen. Background tabs are left out and
+    /// listed in their shown tab's `tabs`. Windows of apps that were busy or
+    /// unchanged may be missing; see [`departures`](Self::departures).
     fn windows(&self) -> Result<Vec<WindowInfo>>;
 
-    /// Apps the last [`windows`](Self::windows) call did not read, because
-    /// they were busy or nothing about them changed. Their windows are
-    /// missing from it but still exist as they were.
-    fn skipped_apps(&self) -> Vec<i32> {
+    /// Windows reported before that have left for good, and why, found since
+    /// the last call. Reported windows missing from a read without
+    /// departing still exist and keep their place.
+    fn departures(&self) -> Vec<(WindowId, Departure)> {
         Vec::new()
+    }
+
+    /// Notes something that empties the screen for a while (a Space change,
+    /// sleep, wake, lock, unlock, a display change), so windows missing
+    /// meanwhile are taken for away rather than closed.
+    fn note_transition(&self) {}
+
+    /// How long until a missing window may count as closed without anything
+    /// notifying, so the caller syncs again then; `None` if no window is.
+    fn next_check(&self) -> Option<std::time::Duration> {
+        None
     }
 
     /// Whether the last [`windows`](Self::windows) call met a new window

@@ -40,8 +40,9 @@ fit, and you never drag a window into place again.
 - **Pinned columns**: pin a column to the left or right edge of the screen; it stays there at full height while the rest of the strip scrolls in the width beside it. One pin per side per workspace, and pins always leave room for a narrow column beside them; focus left and right still reaches a pin.
 - **Drag to reorder**: drag a window by its title bar onto another column and let go: it takes that column's place and the strip rearranges around it. A window dragged out of a stack gets a column of its own, and dropping onto another monitor moves it into that monitor's strip.
 - **Native tabs**: a window with tabs (Finder, Terminal, Safari) is one column; opening, switching or closing tabs keeps it in place, and a tab dragged out into its own window gets a column of its own.
+- **Layout that survives**: windows keep their column, pins and tabs through sleep, the lock screen, fullscreen apps, Space switches and apps that stop responding for a while. A window leaves the strip only when it is closed, minimized or hidden (⌘H), or its app quits; one that an app closes to the background (Slack, Discord) leaves a few seconds later. A minimized or hidden window comes back as a new column.
 - **Workspaces**: nine PaperWM workspaces, independent of macOS Spaces (keep everything on one Space). Each monitor shows one; the others' windows are tucked into a screen corner. Focusing a window that lives on a hidden workspace (⌘Tab, Dock, a click on a notification) brings its workspace in.
-- **Monitors**: focus or move windows to the monitor on the left or right. A column that would spill onto another monitor is tucked away against the other edge. Each display keeps its workspace when another is unplugged or the main display changes, and gets it back when it reconnects (after sleep, say).
+- **Monitors**: focus or move windows to the monitor on the left or right. A column that would spill onto another monitor is tucked away against the other edge. Each display keeps its workspace when another is unplugged or the main display changes, and gets it back when it reconnects (after sleep, say), even if macOS gives it a new display id.
 - **Scratch layer**: floating windows above the workspaces that you can show or hide together.
 - **Window switcher**: ⌃⌥Tab through recently used windows across all workspaces, with live previews if you grant Screen Recording permission (app icons otherwise).
 - **Trackpad**: hold ⌃⌥ (or the modifiers of your Switch Windows shortcut, if you changed it) and scroll with two fingers sideways to pan the strip (focus lands on the column in the middle when you let go), or up/down to switch workspace. macOS reserves three-finger swipes, so this stands in for PaperWM's.
@@ -124,6 +125,16 @@ fit, and you never drag a window into place again.
 
 - **Accessibility** (required): to move, resize and focus windows, and to read the trackpad while ⌃⌥ is held.
 - **Screen Recording** (optional): for window previews in the switcher, and to match the focus border to each window's rounded corners. The welcome guide offers it, and otherwise macOS asks the first time you open the switcher.
+
+## 🩺 Diagnostics
+
+PaperWM logs why each window joined or left the layout, what each read of the windows saw, how displays map to workspaces, and the sleep, wake, Space and app events around them. Window titles are never logged. To watch it live:
+
+```sh
+log stream --level info --predicate 'subsystem == "io.github.antoine-sh.PaperWM"'
+```
+
+or afterwards: `log show --last 10m --predicate 'subsystem == "io.github.antoine-sh.PaperWM"'`.
 
 ## 🛠️ Building
 

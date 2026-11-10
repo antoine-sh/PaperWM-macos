@@ -299,6 +299,28 @@ pub unsafe extern "C" fn pwm_engine_is_settling(engine: *const Engine) -> bool {
     engine.as_ref().is_some_and(Engine::is_settling)
 }
 
+/// Notes something that empties the screen for a while: a Space change,
+/// sleep, wake, lock, unlock or a display change.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_note_transition(engine: *const Engine) {
+    if let Some(engine) = engine.as_ref() {
+        engine.note_transition();
+    }
+}
+
+/// Seconds until `pwm_engine_sync` may find a missing window closed though
+/// nothing notifies, or a negative number if no window is waiting for that.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_next_check(engine: *const Engine) -> f64 {
+    engine.as_ref().and_then(Engine::next_check).unwrap_or(-1.0)
+}
+
 /// Applies settings given as JSON (see `engine::Config`). Malformed JSON
 /// leaves the current settings in place.
 ///
@@ -334,6 +356,17 @@ pub unsafe extern "C" fn pwm_engine_state_json(engine: *const Engine) -> *mut c_
     let json = result.as_ref().map_or(ptr::null_mut(), |json| c_string(json));
     status(result);
     json
+}
+
+/// Diagnostic lines logged since the last call, one per line, or null when
+/// there are none. Free with `pwm_string_free`.
+#[no_mangle]
+pub extern "C" fn pwm_take_log() -> *mut c_char {
+    let lines = crate::log::take();
+    if lines.is_empty() {
+        return ptr::null_mut();
+    }
+    c_string(&lines.join("\n"))
 }
 
 /// # Safety
@@ -556,6 +589,13 @@ mod tests {
             assert!(pwm_engine_state_json(ptr::null()).is_null());
             pwm_string_free(ptr::null_mut());
             pwm_engine_free(engine);
+            crate::log::take();
+            crate::log::line("one".into());
+            crate::log::line("two".into());
+            let log = pwm_take_log();
+            assert_eq!(CStr::from_ptr(log).to_str(), Ok("one\ntwo"));
+            pwm_string_free(log);
+            assert!(pwm_take_log().is_null());
         }
     }
 

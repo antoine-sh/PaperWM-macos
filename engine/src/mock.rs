@@ -2,7 +2,7 @@
 
 use std::cell::{Cell, RefCell};
 
-use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
+use crate::backend::{BackendError, Departure, Result, WindowBackend, WindowId, WindowInfo};
 use crate::geometry::Rect;
 
 #[derive(Debug, Default)]
@@ -16,6 +16,14 @@ pub struct MockBackend {
     focus_is_async: Cell<bool>,
     /// Apps whose windows `windows` leaves out, as if they were busy.
     unresponsive: RefCell<Vec<i32>>,
+    /// Windows left out but still there, as on another Space or a fullscreen one.
+    away: RefCell<Vec<WindowId>>,
+    /// Whether `windows` lists nothing, as during the lock screen or a wake.
+    blackout: Cell<bool>,
+    /// Apps hidden with ⌘H, whose windows are left out.
+    hidden_apps: RefCell<Vec<i32>>,
+    /// What `departures` reports next.
+    departed: RefCell<Vec<(WindowId, Departure)>>,
     /// Background tabs. Like macOS, a tab group is the windows of one app
     /// sharing a frame, of which only the shown one is on screen.
     hidden_tabs: RefCell<Vec<WindowId>>,
@@ -64,9 +72,46 @@ impl MockBackend {
         self.windows.borrow_mut().push(window);
     }
 
+    /// Closes `id`, reporting it destroyed.
     pub fn remove(&self, id: WindowId) {
         self.leave_tab_group(id);
         self.windows.borrow_mut().retain(|w| w.id != id);
+        self.depart(id, Departure::Destroyed);
+    }
+
+    /// Reports `id` as departed on the next read, without changing it.
+    pub fn depart(&self, id: WindowId, why: Departure) {
+        self.departed.borrow_mut().push((id, why));
+    }
+
+    /// Quits app `pid`, closing its windows.
+    pub fn quit_app(&self, pid: i32) {
+        let ids: Vec<WindowId> = self.windows.borrow().iter().filter(|w| w.pid == pid).map(|w| w.id).collect();
+        self.windows.borrow_mut().retain(|w| w.pid != pid);
+        self.departed.borrow_mut().extend(ids.into_iter().map(|id| (id, Departure::AppQuit)));
+    }
+
+    /// Hides or shows app `pid`, like ⌘H; hiding reports its windows departed.
+    pub fn hide_app(&self, pid: i32, hidden: bool) {
+        self.hidden_apps.borrow_mut().retain(|&p| p != pid);
+        if hidden {
+            self.hidden_apps.borrow_mut().push(pid);
+            let ids: Vec<WindowId> = self.windows.borrow().iter().filter(|w| w.pid == pid).map(|w| w.id).collect();
+            self.departed.borrow_mut().extend(ids.into_iter().map(|id| (id, Departure::AppHidden)));
+        }
+    }
+
+    /// Takes `id` off the current Space, or brings it back, without closing it.
+    pub fn set_away(&self, id: WindowId, away: bool) {
+        self.away.borrow_mut().retain(|&w| w != id);
+        if away {
+            self.away.borrow_mut().push(id);
+        }
+    }
+
+    /// Makes `windows` list nothing, or everything again.
+    pub fn set_blackout(&self, blackout: bool) {
+        self.blackout.set(blackout);
     }
 
     /// Opens tab `id` in front of `shown` in its tab group.
@@ -121,7 +166,7 @@ impl MockBackend {
         self.focus_is_async.set(value);
     }
 
-    /// Makes `windows` skip the app `pid`'s windows and report it as busy.
+    /// Makes `windows` skip the app `pid`'s windows, as if it were busy.
     pub fn set_unresponsive(&self, pids: Vec<i32>) {
         *self.unresponsive.borrow_mut() = pids;
     }
@@ -153,16 +198,23 @@ impl WindowBackend for MockBackend {
         if !self.trusted.get() {
             return Err(BackendError::NotTrusted);
         }
+        if self.blackout.get() {
+            return Ok(Vec::new());
+        }
         let busy = self.unresponsive.borrow();
         let hidden = self.hidden_tabs.borrow();
+        let away = self.away.borrow();
+        let hidden_apps = self.hidden_apps.borrow();
         let windows = self.windows.borrow();
-        let shown = windows.iter().filter(|w| !busy.contains(&w.pid) && !hidden.contains(&w.id));
+        let shown = windows.iter().filter(|w| {
+            !busy.contains(&w.pid) && !hidden.contains(&w.id) && !away.contains(&w.id) && !hidden_apps.contains(&w.pid)
+        });
         let tabs = |id| self.tab_group(id).into_iter().filter(|t| hidden.contains(t)).collect();
         Ok(shown.map(|w| WindowInfo { tabs: tabs(w.id), ..w.clone() }).collect())
     }
 
-    fn skipped_apps(&self) -> Vec<i32> {
-        self.unresponsive.borrow().clone()
+    fn departures(&self) -> Vec<(WindowId, Departure)> {
+        std::mem::take(&mut *self.departed.borrow_mut())
     }
 
     fn settling(&self) -> bool {

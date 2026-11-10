@@ -7,8 +7,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::animator::Animator;
 use crate::applier::FrameApplier;
-use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
+use crate::backend::{BackendError, Departure, Result, WindowBackend, WindowId, WindowInfo};
 use crate::geometry::{Point, Rect};
+use crate::log;
 use crate::placement;
 use crate::workspace::{CenterFocus, Pin, Workspace};
 
@@ -298,6 +299,10 @@ pub struct Engine {
     last_workspace: Option<usize>,
     /// The workspace each display showed last, kept while it is disconnected.
     remembered: HashMap<u32, usize>,
+    /// Displays that disconnected and have not come back, most recent last.
+    /// A display with an id never seen takes over the latest one's
+    /// workspace, since an id can change across sleep or reconnecting.
+    vanished: Vec<u32>,
     /// Floating windows above all workspaces, with the frame each returns to.
     scratch: Vec<(WindowId, Rect)>,
     scratch_visible: bool,
@@ -330,6 +335,7 @@ impl Engine {
             active: 0,
             last_workspace: None,
             remembered: HashMap::new(),
+            vanished: Vec::new(),
             scratch: Vec::new(),
             scratch_visible: true,
             mru: Vec::new(),
@@ -478,6 +484,13 @@ impl Engine {
             current.entry(m.id).or_insert(m.workspace);
         }
         self.remembered.extend(&current);
+        for m in &self.monitors {
+            if !monitors.iter().any(|&(id, _)| id == m.id) {
+                self.vanished.retain(|&v| v != m.id);
+                self.vanished.push(m.id);
+            }
+        }
+        self.vanished.retain(|v| !monitors.iter().any(|(id, _)| id == v));
         let mut chosen: Vec<Option<usize>> = vec![None; monitors.len()];
         // Displays still connected keep theirs before returning ones claim theirs.
         for wanted in [&current, &self.remembered] {
@@ -488,10 +501,35 @@ impl Engine {
                 }
             }
         }
+        let mut inherited: Vec<Option<u32>> = vec![None; monitors.len()];
+        for (i, &(id, _)) in monitors.iter().enumerate() {
+            if chosen[i].is_some() || current.contains_key(&id) || self.remembered.contains_key(&id) {
+                continue;
+            }
+            let free = |v: &u32| !chosen.contains(&self.remembered.get(v).copied());
+            if let Some(pos) = self.vanished.iter().rposition(free) {
+                let old = self.vanished.remove(pos);
+                chosen[i] = self.remembered.get(&old).copied();
+                inherited[i] = Some(old);
+            }
+        }
         for i in 0..monitors.len() {
             if chosen[i].is_none() {
                 chosen[i] = Some((0..WORKSPACE_COUNT).find(|w| !chosen.contains(&Some(*w))).unwrap_or(0));
             }
+        }
+        for ((&(id, area), workspace), old) in monitors.iter().zip(&chosen).zip(inherited) {
+            let how = if current.contains_key(&id) {
+                "kept".to_owned()
+            } else if let Some(old) = old {
+                format!("new id, inherited from {old}")
+            } else if self.remembered.contains_key(&id) {
+                "returned".to_owned()
+            } else {
+                "new id".to_owned()
+            };
+            let ws = workspace.expect("chosen above");
+            log::line(format!("monitor {id} {}x{} -> ws{ws} ({how})", area.width, area.height));
         }
         let active = self.monitors.get(self.active).map(|m| m.id);
         self.monitors = monitors
@@ -511,8 +549,9 @@ impl Engine {
     /// Reconciles the layout with the windows that exist now: adds new ones
     /// next to the focused column, drops closed or minimized ones, puts back
     /// tiled windows that were moved, and follows the system's keyboard
-    /// focus, bringing in its workspace. Windows of apps the backend skipped,
-    /// busy or unchanged, are kept as they were.
+    /// focus, bringing in its workspace. A managed window missing from the
+    /// read (on another Space, during sleep or a Space animation, of a busy or
+    /// unchanged app) is kept as it was until the backend reports it departed.
     pub fn sync(&mut self) -> Result<()> {
         self.sync_dropping(None)
     }
@@ -531,7 +570,14 @@ impl Engine {
             return Ok(());
         }
         let windows = self.backend.windows()?;
+        let departed: HashMap<WindowId, Departure> = self.backend.departures().into_iter().collect();
         self.settling = self.backend.settling();
+        // Why managed windows that leave the layout below do so, for the log.
+        let mut reasons: HashMap<WindowId, String> =
+            windows.iter().filter(|w| w.is_minimized).map(|w| (w.id, "minimized".into())).collect();
+        reasons.extend(departed.iter().map(|(&id, why)| (id, why.to_string())));
+        // Background tabs count as read: the tab now shown takes their place.
+        let read: HashSet<WindowId> = windows.iter().flat_map(|w| w.tabs.iter().copied().chain([w.id])).collect();
         // Held windows that stopped being tileable without being minimized
         // are kept here to be released below.
         let mut current: HashMap<WindowId, WindowInfo> = windows
@@ -541,12 +587,9 @@ impl Engine {
             .collect();
         // Windows whose frame was just read, as opposed to kept from before.
         let fresh: HashSet<WindowId> = current.keys().copied().collect();
-        let skipped = self.backend.skipped_apps();
-        if !skipped.is_empty() {
-            for (&id, info) in &self.info {
-                if skipped.contains(&info.pid) {
-                    current.entry(id).or_insert_with(|| info.clone());
-                }
+        for (&id, info) in &self.info {
+            if !read.contains(&id) && !departed.contains_key(&id) {
+                current.insert(id, info.clone());
             }
         }
         // Windows of floating apps, and fixed-size ones, leave the layout;
@@ -565,6 +608,14 @@ impl Engine {
         for id in floating {
             let info = current.remove(&id).expect("listed above");
             if self.info.contains_key(&id) {
+                let reason = if !info.is_standard {
+                    "floats: not a standard window"
+                } else if !info.is_resizable {
+                    "floats: fixed size"
+                } else {
+                    "floats: app rule"
+                };
+                reasons.insert(id, reason.into());
                 let workspace = self.workspaces.iter().position(|w| w.contains(id));
                 let monitor = self.monitors.iter().find(|m| Some(m.workspace) == workspace);
                 let area = monitor.unwrap_or(&self.monitors[self.active]).area;
@@ -580,6 +631,15 @@ impl Engine {
             self.applier.forget(w.id);
         }
 
+        let removed = |id: WindowId, place: String| {
+            let app = previous.get(&id).map_or("?", |w| w.app_name.as_str());
+            // Not read means the backend did not report it this time; it logs why.
+            let reason = reasons.get(&id).map_or("not in the read", String::as_str);
+            log::line(format!("remove {id} {app} {place}: {reason}"));
+        };
+        for &(id, _) in self.scratch.iter().filter(|(id, _)| !self.info.contains_key(id)) {
+            removed(id, "scratch".into());
+        }
         self.scratch.retain(|(id, _)| self.info.contains_key(id));
         self.mru.retain(|id| self.info.contains_key(id));
         self.original_heights.retain(|id, _| self.info.contains_key(id));
@@ -592,9 +652,14 @@ impl Engine {
             }
         }
         let mut managed: HashSet<WindowId> = self.scratch.iter().map(|&(id, _)| id).collect();
-        for workspace in &mut self.workspaces {
-            let gone: Vec<WindowId> = workspace.windows().filter(|id| !self.info.contains_key(id)).collect();
-            for id in gone {
+        for (index, workspace) in self.workspaces.iter_mut().enumerate() {
+            // Columns as they were, before removals shift them.
+            let gone: Vec<(usize, WindowId)> = (workspace.columns().iter().enumerate())
+                .flat_map(|(c, column)| column.windows().iter().map(move |&id| (c, id)))
+                .filter(|(_, id)| !self.info.contains_key(id))
+                .collect();
+            for (column, id) in gone {
+                removed(id, format!("ws{index} col{column}"));
                 workspace.remove_window(id);
                 self.applier.forget(id);
             }
@@ -638,6 +703,8 @@ impl Engine {
                 }
                 None => ws.insert_window(id, frame.width, viewport),
             }
+            let column = ws.columns().iter().position(|c| c.windows().contains(&id)).unwrap_or_default();
+            log::line(format!("adopt {id} {app} ws{index} col{column}"));
             if front == Some(self.info[&id].pid) {
                 *kept = Some(id);
             }
@@ -708,6 +775,7 @@ impl Engine {
             else {
                 continue;
             };
+            log::line(format!("tab {new} takes the place of {old} {}", info.app_name));
             for workspace in &mut self.workspaces {
                 workspace.replace_window(old, new);
             }
@@ -840,6 +908,17 @@ impl Engine {
             }
         }
         Ok(changed)
+    }
+
+    /// See [`WindowBackend::note_transition`].
+    pub fn note_transition(&self) {
+        self.backend.note_transition();
+    }
+
+    /// Seconds until a sync may find a missing window closed though nothing
+    /// notifies; see [`WindowBackend::next_check`].
+    pub fn next_check(&self) -> Option<f64> {
+        self.backend.next_check().map(|d| d.as_secs_f64())
     }
 
     /// Whether the last sync met a window still being created, so the
@@ -1168,8 +1247,8 @@ mod tests {
         fn set_size(&self, id: WindowId, width: f64, height: f64) -> Result<()> {
             self.0.set_size(id, width, height)
         }
-        fn skipped_apps(&self) -> Vec<i32> {
-            self.0.skipped_apps()
+        fn departures(&self) -> Vec<(WindowId, Departure)> {
+            self.0.departures()
         }
         fn settling(&self) -> bool {
             self.0.settling()
@@ -1700,6 +1779,19 @@ mod tests {
         assert_eq!(shown(&engine), vec![1, 0]);
         // Keyboard commands still act on the same display.
         assert_eq!(engine.state().active_monitor, 1);
+    }
+
+    #[test]
+    fn display_with_a_new_id_inherits_the_vanished_displays_workspace() {
+        let (mut engine, _backend) = engine_with(vec![window(1, 0.0, 300.0)]);
+        engine.command(Command::SwitchWorkspace(3)).unwrap();
+        // The id changes across sleep, in one call or with no display between.
+        engine.set_monitors(&[(2, SCREEN)]).unwrap();
+        assert_eq!(shown(&engine), vec![3]);
+        engine.set_monitors(&[(5, SCREEN), (9, SCREEN)]).unwrap();
+        engine.set_monitors(&[(9, SCREEN)]).unwrap();
+        engine.set_monitors(&[(6, SCREEN), (9, SCREEN)]).unwrap();
+        assert_eq!(shown(&engine)[0], 3);
     }
 
     #[test]
@@ -2451,6 +2543,140 @@ mod tests {
         let calls = backend.set_frame_calls();
         engine.sync().unwrap();
         assert_eq!(backend.set_frame_calls(), calls);
+    }
+
+    #[test]
+    fn layout_changes_are_logged_with_their_reason() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0), window(3, 200.0, 300.0)]);
+        log::take();
+        engine.sync().unwrap();
+        assert_eq!(log::take(), ["adopt 1 App 1 ws0 col0", "adopt 2 App 2 ws0 col1", "adopt 3 App 3 ws0 col2"]);
+        backend.remove(2);
+        backend.update(3, |w| w.is_minimized = true);
+        engine.sync().unwrap();
+        let mut lines = log::take();
+        lines.sort();
+        assert_eq!(lines, ["remove 2 App 2 ws0 col1: destroyed", "remove 3 App 3 ws0 col2: minimized"]);
+        backend.update(1, |w| w.is_resizable = false);
+        engine.sync().unwrap();
+        assert_eq!(log::take(), ["remove 1 App 1 ws0 col0: floats: fixed size"]);
+        engine.set_monitors(&[(1, SCREEN), (7, SCREEN)]).unwrap();
+        assert_eq!(log::take(), ["monitor 1 1016x600 -> ws0 (kept)", "monitor 7 1016x600 -> ws1 (new id)"]);
+    }
+
+    /// Three windows, the middle one pinned left and the last a tab group,
+    /// focus on the first: a layout with something to lose.
+    fn rich_layout() -> (Engine, Rc<MockBackend>) {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0), window(3, 200.0, 300.0)]);
+        engine.sync().unwrap();
+        engine.command(Command::FocusWindow(2)).unwrap();
+        engine.command(Command::TogglePinLeft).unwrap();
+        backend.add_tab(3, 4);
+        engine.sync().unwrap();
+        engine.command(Command::FocusWindow(1)).unwrap();
+        (engine, backend)
+    }
+
+    fn layout(engine: &Engine) -> String {
+        serde_json::to_string(&engine.state().workspaces).unwrap()
+    }
+
+    #[test]
+    fn blackout_keeps_every_window_in_place() {
+        let (mut engine, backend) = rich_layout();
+        let before = layout(&engine);
+        backend.set_blackout(true);
+        for _ in 0..3 {
+            engine.sync().unwrap();
+        }
+        assert_eq!(layout(&engine), before);
+        backend.set_blackout(false);
+        engine.sync().unwrap();
+        assert_eq!(layout(&engine), before);
+    }
+
+    #[test]
+    fn fullscreen_exit_keeps_the_desktop_layout() {
+        let (mut engine, backend) = rich_layout();
+        let before = columns(&engine);
+        // Window 1 goes fullscreen onto its own Space; the others are away.
+        backend.update(1, |w| w.is_fullscreen = true);
+        for id in [2, 4] {
+            backend.set_away(id, true);
+        }
+        engine.sync().unwrap();
+        // It leaves fullscreen before the others are back, then they return.
+        backend.update(1, |w| w.is_fullscreen = false);
+        backend.set_away(1, true);
+        engine.sync().unwrap();
+        for id in [1, 2, 4] {
+            backend.set_away(id, false);
+        }
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), before);
+        assert_eq!(engine.state().workspaces[0].columns[0].pinned, Some(Pin::Left));
+    }
+
+    #[test]
+    fn busy_app_keeps_its_windows_for_good() {
+        let (mut engine, backend) = rich_layout();
+        let before = layout(&engine);
+        backend.set_unresponsive(vec![101, 102]);
+        for _ in 0..20 {
+            engine.sync().unwrap();
+        }
+        backend.set_unresponsive(vec![]);
+        engine.sync().unwrap();
+        assert_eq!(layout(&engine), before);
+    }
+
+    #[test]
+    fn departed_windows_leave_and_others_stay() {
+        let (mut engine, backend) = rich_layout();
+        backend.set_away(1, true);
+        backend.set_away(2, true);
+        backend.depart(2, Departure::Closed);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![4]]);
+        // Only the app's quitting takes the away window out.
+        backend.quit_app(101);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![4]]);
+    }
+
+    #[test]
+    fn hidden_app_leaves_and_comes_back_as_new() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0), window(3, 200.0, 300.0)]);
+        engine.sync().unwrap();
+        backend.hide_app(101, true);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![2], vec![3]]);
+        backend.hide_app(101, false);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine).len(), 3);
+    }
+
+    #[test]
+    fn minimized_away_window_leaves() {
+        let (mut engine, backend) = rich_layout();
+        backend.set_away(1, true);
+        backend.depart(1, Departure::Minimized);
+        engine.sync().unwrap();
+        assert!(!engine.workspace(0).unwrap().contains(1));
+    }
+
+    #[test]
+    fn new_window_after_a_blackout_joins_without_moving_the_rest() {
+        let (mut engine, backend) = rich_layout();
+        backend.set_blackout(true);
+        engine.sync().unwrap();
+        backend.set_blackout(false);
+        backend.add(window(5, 500.0, 300.0));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![2], vec![1], vec![5], vec![4]]);
     }
 
     #[test]
