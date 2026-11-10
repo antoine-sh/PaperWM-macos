@@ -15,6 +15,7 @@ use super::observer::{AppObserver, HandlerSlot};
 use super::window_list;
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
 use crate::geometry::{Point, Rect, Size};
+use crate::log;
 use crate::settle::Settling;
 
 /// A failed call that took at least this long ran into the messaging
@@ -74,6 +75,8 @@ pub struct AxBackend {
     settling: RefCell<Settling>,
     /// Whether the last `windows()` call met one.
     is_settling: Cell<bool>,
+    /// The last read's summary line, logged again only when it changes.
+    last_summary: RefCell<String>,
     /// Application elements, kept between calls.
     apps: RefCell<HashMap<i32, AxElement>>,
     /// Declared before `handler` so observers are torn down first.
@@ -203,6 +206,10 @@ impl WindowBackend for AxBackend {
         // Known windows of read apps that left the screen. They are reported
         // only if the user turns out to be on a fullscreen window's Space.
         let mut away: Vec<(WindowInfo, AxElement)> = Vec::new();
+        // Why known windows were not reported, for the log: per window, and per app that failed.
+        let mut why: HashMap<WindowId, String> = HashMap::new();
+        let mut app_errors: HashMap<i32, String> = HashMap::new();
+        let mut read = 0;
         for (pid, (app_name, ids)) in apps {
             if self.is_stalled(pid) {
                 // It may change unnoticed while busy, so it is read once back.
@@ -217,7 +224,11 @@ impl WindowBackend for AxBackend {
                 continue;
             }
             seen.remove(&pid);
-            let Some(app) = self.app(pid) else { continue };
+            read += 1;
+            let Some(app) = self.app(pid) else {
+                app_errors.insert(pid, "no Accessibility element for its app".into());
+                continue;
+            };
             let app_windows = match self.timed(pid, || app.elements(kAXWindowsAttribute)) {
                 Ok(windows) => windows,
                 Err(err) if err == kAXErrorAPIDisabled => {
@@ -236,6 +247,7 @@ impl WindowBackend for AxBackend {
                         skipped.push(pid);
                     }
                     // Apps without Accessibility support are skipped.
+                    app_errors.insert(pid, format!("its app failed to list windows (AX error {err})"));
                     continue;
                 }
             };
@@ -264,7 +276,10 @@ impl WindowBackend for AxBackend {
                         continue;
                     }
                     // The window closed meanwhile.
-                    Err(_) => continue,
+                    Err(err) => {
+                        why.insert(id, format!("AX error {err} reading it"));
+                        continue;
+                    }
                 };
                 let [position, size, title, subrole, minimized, fullscreen] = &values[..] else { continue };
                 let is_fullscreen = fullscreen.as_ref().and_then(as_bool).unwrap_or(false);
@@ -308,6 +323,7 @@ impl WindowBackend for AxBackend {
                         if is_standard {
                             hidden.push((id, frame));
                             if previous.contains_key(&id) {
+                                why.insert(id, "off screen, and no fullscreen window on screen".into());
                                 away.push((info, element));
                             }
                         }
@@ -354,7 +370,8 @@ impl WindowBackend for AxBackend {
         // On a fullscreen window's own Space every other window is off
         // screen, not gone: known ones of read apps are still reported, and
         // other apps count as skipped until the user is back.
-        if windows.iter().any(|(z, w)| w.is_fullscreen && *z != usize::MAX) {
+        let on_fullscreen_space = windows.iter().any(|(z, w)| w.is_fullscreen && *z != usize::MAX);
+        if on_fullscreen_space {
             for (info, element) in away {
                 if let Some(observer) = observers.get_mut(&info.pid) {
                     observer.watch_window(info.id, &element);
@@ -375,6 +392,28 @@ impl WindowBackend for AxBackend {
                     skipped.push(cached.pid);
                 }
             }
+        }
+        let tab_ids: BTreeSet<WindowId> = windows.iter().flat_map(|(_, w)| w.tabs.iter().copied()).collect();
+        for (id, cached) in previous.iter().filter(|(id, c)| !elements.contains_key(id) && !skipped.contains(&c.pid)) {
+            let reason = match why.remove(id) {
+                _ if tab_ids.contains(id) => "now a background tab".to_owned(),
+                Some(why) => why,
+                None if !present.contains(&cached.pid) => "its app has no window on screen".to_owned(),
+                None => app_errors.get(&cached.pid).cloned().unwrap_or_else(|| "its app did not list it".to_owned()),
+            };
+            log::line(format!("backend: dropped {id} {}: {reason}", cached.app_name));
+        }
+        let summary = format!(
+            "backend: {} windows of {} apps on screen{}; read {read} apps, skipped {}; reported {}",
+            on_screen.len(),
+            present.len(),
+            if on_fullscreen_space { " (a fullscreen Space)" } else { "" },
+            skipped.len(),
+            windows.len(),
+        );
+        if *self.last_summary.borrow() != summary {
+            log::line(summary.clone());
+            *self.last_summary.borrow_mut() = summary;
         }
         // Skipped apps' windows still exist; keep their handles for later.
         for (id, cached) in previous {

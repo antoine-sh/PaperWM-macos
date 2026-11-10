@@ -149,6 +149,11 @@ PwmStatus pwm_engine_set_config(PwmEngine *engine, const char *json);
 char *pwm_engine_state_json(const PwmEngine *engine);
 void pwm_string_free(char *string);
 
+// Diagnostic lines logged since the last call (why windows joined or left the
+// layout, what each read saw), separated by newlines, or null when there are
+// none. Free with pwm_string_free.
+char *pwm_take_log(void);
+
 // Start or stop watching an app's windows for changes.
 void pwm_engine_observe_app(const PwmEngine *engine, int32_t pid);
 void pwm_engine_forget_app(const PwmEngine *engine, int32_t pid);

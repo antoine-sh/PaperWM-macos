@@ -125,6 +125,16 @@ fit, and you never drag a window into place again.
 - **Accessibility** (required): to move, resize and focus windows, and to read the trackpad while ⌃⌥ is held.
 - **Screen Recording** (optional): for window previews in the switcher, and to match the focus border to each window's rounded corners. The welcome guide offers it, and otherwise macOS asks the first time you open the switcher.
 
+## 🩺 Diagnostics
+
+PaperWM logs why each window joined or left the layout, what each read of the windows saw, how displays map to workspaces, and the sleep, wake, Space and app events around them. Window titles are never logged. To watch it live:
+
+```sh
+log stream --level info --predicate 'subsystem == "io.github.antoine-sh.PaperWM"'
+```
+
+or afterwards: `log show --last 10m --predicate 'subsystem == "io.github.antoine-sh.PaperWM"'`.
+
 ## 🛠️ Building
 
 Requirements: macOS 14 or later, Xcode 15 or later (for Swift), and Rust via [rustup](https://rustup.rs).

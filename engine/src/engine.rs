@@ -9,6 +9,7 @@ use crate::animator::Animator;
 use crate::applier::FrameApplier;
 use crate::backend::{BackendError, Result, WindowBackend, WindowId, WindowInfo};
 use crate::geometry::{Point, Rect};
+use crate::log;
 use crate::placement;
 use crate::workspace::{CenterFocus, Pin, Workspace};
 
@@ -493,6 +494,17 @@ impl Engine {
                 chosen[i] = Some((0..WORKSPACE_COUNT).find(|w| !chosen.contains(&Some(*w))).unwrap_or(0));
             }
         }
+        for (&(id, area), workspace) in monitors.iter().zip(&chosen) {
+            let how = if current.contains_key(&id) {
+                "kept"
+            } else if self.remembered.contains_key(&id) {
+                "returned"
+            } else {
+                "new id"
+            };
+            let ws = workspace.expect("chosen above");
+            log::line(format!("monitor {id} {}x{} -> ws{ws} ({how})", area.width, area.height));
+        }
         let active = self.monitors.get(self.active).map(|m| m.id);
         self.monitors = monitors
             .iter()
@@ -532,6 +544,9 @@ impl Engine {
         }
         let windows = self.backend.windows()?;
         self.settling = self.backend.settling();
+        // Why managed windows that leave the layout below do so, for the log.
+        let mut reasons: HashMap<WindowId, &str> =
+            windows.iter().filter(|w| w.is_minimized).map(|w| (w.id, "minimized")).collect();
         // Held windows that stopped being tileable without being minimized
         // are kept here to be released below.
         let mut current: HashMap<WindowId, WindowInfo> = windows
@@ -565,6 +580,14 @@ impl Engine {
         for id in floating {
             let info = current.remove(&id).expect("listed above");
             if self.info.contains_key(&id) {
+                let reason = if !info.is_standard {
+                    "floats: not a standard window"
+                } else if !info.is_resizable {
+                    "floats: fixed size"
+                } else {
+                    "floats: app rule"
+                };
+                reasons.insert(id, reason);
                 let workspace = self.workspaces.iter().position(|w| w.contains(id));
                 let monitor = self.monitors.iter().find(|m| Some(m.workspace) == workspace);
                 let area = monitor.unwrap_or(&self.monitors[self.active]).area;
@@ -580,6 +603,15 @@ impl Engine {
             self.applier.forget(w.id);
         }
 
+        let removed = |id: WindowId, place: String| {
+            let app = previous.get(&id).map_or("?", |w| w.app_name.as_str());
+            // Not read means the backend did not report it this time; it logs why.
+            let reason = reasons.get(&id).copied().unwrap_or("not in the read");
+            log::line(format!("remove {id} {app} {place}: {reason}"));
+        };
+        for &(id, _) in self.scratch.iter().filter(|(id, _)| !self.info.contains_key(id)) {
+            removed(id, "scratch".into());
+        }
         self.scratch.retain(|(id, _)| self.info.contains_key(id));
         self.mru.retain(|id| self.info.contains_key(id));
         self.original_heights.retain(|id, _| self.info.contains_key(id));
@@ -592,9 +624,14 @@ impl Engine {
             }
         }
         let mut managed: HashSet<WindowId> = self.scratch.iter().map(|&(id, _)| id).collect();
-        for workspace in &mut self.workspaces {
-            let gone: Vec<WindowId> = workspace.windows().filter(|id| !self.info.contains_key(id)).collect();
-            for id in gone {
+        for (index, workspace) in self.workspaces.iter_mut().enumerate() {
+            // Columns as they were, before removals shift them.
+            let gone: Vec<(usize, WindowId)> = (workspace.columns().iter().enumerate())
+                .flat_map(|(c, column)| column.windows().iter().map(move |&id| (c, id)))
+                .filter(|(_, id)| !self.info.contains_key(id))
+                .collect();
+            for (column, id) in gone {
+                removed(id, format!("ws{index} col{column}"));
                 workspace.remove_window(id);
                 self.applier.forget(id);
             }
@@ -638,6 +675,8 @@ impl Engine {
                 }
                 None => ws.insert_window(id, frame.width, viewport),
             }
+            let column = ws.columns().iter().position(|c| c.windows().contains(&id)).unwrap_or_default();
+            log::line(format!("adopt {id} {app} ws{index} col{column}"));
             if front == Some(self.info[&id].pid) {
                 *kept = Some(id);
             }
@@ -708,6 +747,7 @@ impl Engine {
             else {
                 continue;
             };
+            log::line(format!("tab {new} takes the place of {old} {}", info.app_name));
             for workspace in &mut self.workspaces {
                 workspace.replace_window(old, new);
             }
@@ -2451,6 +2491,26 @@ mod tests {
         let calls = backend.set_frame_calls();
         engine.sync().unwrap();
         assert_eq!(backend.set_frame_calls(), calls);
+    }
+
+    #[test]
+    fn layout_changes_are_logged_with_their_reason() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0), window(3, 200.0, 300.0)]);
+        log::take();
+        engine.sync().unwrap();
+        assert_eq!(log::take(), ["adopt 1 App 1 ws0 col0", "adopt 2 App 2 ws0 col1", "adopt 3 App 3 ws0 col2"]);
+        backend.remove(2);
+        backend.update(3, |w| w.is_minimized = true);
+        engine.sync().unwrap();
+        let mut lines = log::take();
+        lines.sort();
+        assert_eq!(lines, ["remove 2 App 2 ws0 col1: not in the read", "remove 3 App 3 ws0 col2: minimized"]);
+        backend.update(1, |w| w.is_resizable = false);
+        engine.sync().unwrap();
+        assert_eq!(log::take(), ["remove 1 App 1 ws0 col0: floats: fixed size"]);
+        engine.set_monitors(&[(1, SCREEN), (7, SCREEN)]).unwrap();
+        assert_eq!(log::take(), ["monitor 1 1016x600 -> ws0 (kept)", "monitor 7 1016x600 -> ws1 (new id)"]);
     }
 
     #[test]

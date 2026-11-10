@@ -85,6 +85,13 @@ final class Engine {
         }
     }
 
+    /// Diagnostic lines the engine logged since the last call, oldest first.
+    static func takeLog() -> [String] {
+        guard let text = pwm_take_log() else { return [] }
+        defer { pwm_string_free(text) }
+        return String(cString: text).split(separator: "\n").map(String.init)
+    }
+
     /// Display id and usable area of each monitor in Accessibility
     /// coordinates, main one first. The engine keeps workspaces by display id.
     func setMonitors(_ screens: [NSScreen]) throws {

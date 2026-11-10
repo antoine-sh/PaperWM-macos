@@ -1,5 +1,6 @@
 import AppKit
 import CPaperWMEngine
+import os
 
 /// Connects the engine to the system: tells it about monitors and apps,
 /// syncs it when windows change, and routes hot keys to it.
@@ -33,6 +34,11 @@ final class WindowManager {
     /// Drives strip slides while one is running, once per display frame.
     private lazy var frames = FrameDriver { [weak self] in self?.step() }
     private var lastTick: CFTimeInterval = 0
+    /// Why windows joined or left the layout, and the sleep, wake and Space
+    /// changes around it: `log stream --predicate 'subsystem == "io.github.antoine-sh.PaperWM"'`.
+    private let log = Logger(subsystem: "io.github.antoine-sh.PaperWM", category: "windows")
+    /// Whether a sync skipped by the current hold was logged, so one hold logs once.
+    private var loggedHold = false
     /// When each distinct error was last logged, to keep repeats out of the log.
     private var lastLogged: [String: CFTimeInterval] = [:]
     /// The sleep notifications not yet followed by their wake. Windows read
@@ -50,6 +56,7 @@ final class WindowManager {
     /// fades and displays come back.
     private var heldUntil: CFTimeInterval = 0
     private var isHeld: Bool { !asleep.isEmpty || CACurrentMediaTime() < heldUntil }
+    private var asleepNames: String { asleep.map(\.rawValue).sorted().joined(separator: ", ") }
 
     func start() {
         connectEngine()
@@ -63,6 +70,8 @@ final class WindowManager {
         for name in [NSWorkspace.activeSpaceDidChangeNotification, NSWorkspace.didUnhideApplicationNotification] {
             workspace.addObserver(self, selector: #selector(somethingChanged(_:)), name: name, object: nil)
         }
+        workspace.addObserver(self, selector: #selector(logOnly(_:)),
+                              name: NSWorkspace.didHideApplicationNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged(_:)),
                                                name: NSApplication.didChangeScreenParametersNotification, object: nil)
         let locks = DistributedNotificationCenter.default()
@@ -241,8 +250,17 @@ final class WindowManager {
         }
     }
 
+    /// Whether syncs are held, logging the first one held by each hold.
+    private func held() -> Bool {
+        if isHeld && !loggedHold {
+            loggedHold = true
+            log.notice("sync held: asleep \(self.asleepNames, privacy: .public)")
+        }
+        return isHeld
+    }
+
     func syncNow() {
-        guard !isHeld else { return }
+        guard !held() else { return }
         report { try engine.sync() }
         publish()
     }
@@ -271,7 +289,7 @@ final class WindowManager {
     }
 
     private func updateMonitors() {
-        guard !isHeld else { return }
+        guard !held() else { return }
         report {
             try engine.setMonitors(NSScreen.screens)
             try engine.sync()
@@ -289,9 +307,23 @@ final class WindowManager {
             let now = CACurrentMediaTime()
             if now - (lastLogged[message] ?? -.infinity) >= 5 {
                 lastLogged[message] = now
-                NSLog("PaperWM: \(message)")
+                log.error("\(message, privacy: .public)")
             }
         }
+        for line in Engine.takeLog() {
+            log.notice("\(line, privacy: .public)")
+        }
+    }
+
+    private static func describe(_ notification: Notification) -> String {
+        let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+        let name = notification.name.rawValue
+        guard let app else { return name }
+        return "\(name) \(app.localizedName ?? "?") (\(app.processIdentifier))"
+    }
+
+    @objc private func logOnly(_ notification: Notification) {
+        log.notice("\(Self.describe(notification), privacy: .public)")
     }
 
     @objc private func appLaunched(_ notification: Notification) {
@@ -314,6 +346,7 @@ final class WindowManager {
 
     @objc private func appTerminated(_ notification: Notification) {
         guard let app = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
+        log.notice("\(Self.describe(notification), privacy: .public)")
         engine.forgetApp(app.processIdentifier)
         scheduleSync()
     }
@@ -330,14 +363,18 @@ final class WindowManager {
     }
 
     @objc private func somethingChanged(_ notification: Notification) {
+        log.notice("\(Self.describe(notification), privacy: .public)")
         scheduleSync()
     }
 
     @objc private func screensChanged(_ notification: Notification) {
+        let ids = NSScreen.screens.map { String($0.displayID) }.joined(separator: ", ")
+        log.notice("screens changed: \(ids, privacy: .public)")
         updateMonitors()
     }
 
     @objc private func slept(_ notification: Notification) {
+        log.notice("sleep: \(notification.name.rawValue, privacy: .public)")
         asleep.insert(notification.name)
     }
 
@@ -347,6 +384,8 @@ final class WindowManager {
     @objc private func woke(_ notification: Notification) {
         guard let sleep = Self.wakes[notification.name] else { return }
         asleep.remove(sleep)
+        let name = notification.name.rawValue
+        log.notice("wake: \(name, privacy: .public), still asleep: \(self.asleepNames, privacy: .public)")
         if asleep.isEmpty {
             resume()
         } else {
@@ -358,12 +397,15 @@ final class WindowManager {
     /// sleep whose wake never came cannot hold syncs for good.
     private func wakeIfUnlocked() {
         guard !asleep.isEmpty, Self.isUnlockedOnConsole() else { return }
+        log.notice("unlocked on console: ending the hold on \(self.asleepNames, privacy: .public)")
         asleep.removeAll()
         resume()
     }
 
     private func resume() {
         guard asleep.isEmpty else { return }
+        log.notice("resume: re-reading monitors and windows at 0.6, 2, 5 and 10 s")
+        loggedHold = false
         heldUntil = CACurrentMediaTime() + 0.5
         for delay in [0.6, 2.0, 5.0, 10.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in

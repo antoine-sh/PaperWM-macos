@@ -336,6 +336,17 @@ pub unsafe extern "C" fn pwm_engine_state_json(engine: *const Engine) -> *mut c_
     json
 }
 
+/// Diagnostic lines logged since the last call, one per line, or null when
+/// there are none. Free with `pwm_string_free`.
+#[no_mangle]
+pub extern "C" fn pwm_take_log() -> *mut c_char {
+    let lines = crate::log::take();
+    if lines.is_empty() {
+        return ptr::null_mut();
+    }
+    c_string(&lines.join("\n"))
+}
+
 /// # Safety
 /// `string` must come from this library and be freed only once, or be null.
 #[no_mangle]
@@ -556,6 +567,13 @@ mod tests {
             assert!(pwm_engine_state_json(ptr::null()).is_null());
             pwm_string_free(ptr::null_mut());
             pwm_engine_free(engine);
+            crate::log::take();
+            crate::log::line("one".into());
+            crate::log::line("two".into());
+            let log = pwm_take_log();
+            assert_eq!(CStr::from_ptr(log).to_str(), Ok("one\ntwo"));
+            pwm_string_free(log);
+            assert!(pwm_take_log().is_null());
         }
     }
 
