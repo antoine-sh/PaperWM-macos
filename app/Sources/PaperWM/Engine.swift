@@ -137,6 +137,19 @@ final class Engine {
     /// sync should follow shortly.
     var isSettling: Bool { pwm_engine_is_settling(handle) }
 
+    /// Tells the engine the screen empties for a while (a Space change, sleep,
+    /// wake, lock), so windows missing meanwhile are taken for away.
+    func noteTransition() {
+        pwm_engine_note_transition(handle)
+    }
+
+    /// Seconds until a sync may find a missing window closed though nothing
+    /// notifies, or nil if none is waiting for that.
+    var nextCheck: Double? {
+        let seconds = pwm_engine_next_check(handle)
+        return seconds < 0 ? nil : seconds
+    }
+
     private static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase

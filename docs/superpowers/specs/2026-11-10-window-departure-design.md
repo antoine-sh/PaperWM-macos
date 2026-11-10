@@ -1,6 +1,36 @@
 # Windows leave the layout only on evidence — design
 
-Status: proposed, not implemented. Nothing here has been run on a Mac.
+Status: implemented after one diagnostic log from a real Mac (below).
+
+## What the first log showed (Zen into fullscreen and back)
+
+- `kAXWindowsAttribute` follows the active Space and switches at a different
+  moment than CGWindowList. Entering fullscreen, Zen's AX list dropped its
+  window while CG still showed it on screen; leaving, six on-screen apps were
+  read and reported nothing, because AX still showed the fullscreen Space.
+  So the AX list does **not** list other Spaces' windows, and during an
+  animation the two sources disagree.
+- After that empty read, `seen` recorded each app's on-screen set as read,
+  so the apps were skipped as unchanged and their windows never came back
+  until each app notified. This is why every window stayed forgotten.
+
+Refinements made in the implementation:
+
+- A known window that CG shows on screen but its app's AX list leaves out
+  counts as a transition, and the app is not recorded in `seen`, so it is
+  read again next time.
+- A known window counts as present for the home test when it is reported or
+  CG shows it on screen; windows of apps skipped as unchanged would
+  otherwise make every read look like a blackout.
+- The implicit blackout needs at least two windows to vanish in one read, so
+  a lone window closed to the background still closes.
+- A window whose busy app cannot answer for it loses its absence clock, so
+  a due verdict never makes the app re-sync in a tight loop; the app also
+  waits at least 0.5 s between rechecks.
+- `Departure::Minimized` covers a window minimized while its app has nothing
+  else on screen, which is never listed.
+- Not done: the `kill(pid, 0)` check for a quit missed during sleep;
+  NSWorkspace delivers the termination on wake.
 
 ## Problem
 

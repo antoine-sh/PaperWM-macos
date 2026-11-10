@@ -299,6 +299,28 @@ pub unsafe extern "C" fn pwm_engine_is_settling(engine: *const Engine) -> bool {
     engine.as_ref().is_some_and(Engine::is_settling)
 }
 
+/// Notes something that empties the screen for a while: a Space change,
+/// sleep, wake, lock, unlock or a display change.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_note_transition(engine: *const Engine) {
+    if let Some(engine) = engine.as_ref() {
+        engine.note_transition();
+    }
+}
+
+/// Seconds until `pwm_engine_sync` may find a missing window closed though
+/// nothing notifies, or a negative number if no window is waiting for that.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_next_check(engine: *const Engine) -> f64 {
+    engine.as_ref().and_then(Engine::next_check).unwrap_or(-1.0)
+}
+
 /// Applies settings given as JSON (see `engine::Config`). Malformed JSON
 /// leaves the current settings in place.
 ///

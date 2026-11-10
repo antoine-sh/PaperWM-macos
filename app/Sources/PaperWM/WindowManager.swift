@@ -37,26 +37,18 @@ final class WindowManager {
     /// Why windows joined or left the layout, and the sleep, wake and Space
     /// changes around it: `log stream --predicate 'subsystem == "io.github.antoine-sh.PaperWM"'`.
     private let log = Logger(subsystem: "io.github.antoine-sh.PaperWM", category: "windows")
-    /// Whether a sync skipped by the current hold was logged, so one hold logs once.
-    private var loggedHold = false
+    /// Bumped by each sync, so only the latest scheduled recheck runs.
+    private var recheckGeneration = 0
     /// When each distinct error was last logged, to keep repeats out of the log.
     private var lastLogged: [String: CFTimeInterval] = [:]
-    /// The sleep notifications not yet followed by their wake. Windows read
-    /// while the Mac, its displays or the session sleep, or the screen is
-    /// locked, are off screen and would leave the layout, losing their place.
-    private var asleep: Set<Notification.Name> = []
-    /// Each wake notification, with the sleep notification it ends.
+    /// Each wake notification, with the sleep notification it ends. Windows
+    /// leave the screen meanwhile, which the engine must take for away.
     private static let wakes: [Notification.Name: Notification.Name] = [
         NSWorkspace.didWakeNotification: NSWorkspace.willSleepNotification,
         NSWorkspace.screensDidWakeNotification: NSWorkspace.screensDidSleepNotification,
         NSWorkspace.sessionDidBecomeActiveNotification: NSWorkspace.sessionDidResignActiveNotification,
         Notification.Name("com.apple.screenIsUnlocked"): Notification.Name("com.apple.screenIsLocked"),
     ]
-    /// Syncs stay held a moment after the last wake, while the lock screen
-    /// fades and displays come back.
-    private var heldUntil: CFTimeInterval = 0
-    private var isHeld: Bool { !asleep.isEmpty || CACurrentMediaTime() < heldUntil }
-    private var asleepNames: String { asleep.map(\.rawValue).sorted().joined(separator: ", ") }
 
     func start() {
         connectEngine()
@@ -121,11 +113,6 @@ final class WindowManager {
     }
 
     func perform(_ action: Action) {
-        // A hot key or gesture means the user is back, whatever was missed.
-        if !asleep.isEmpty {
-            asleep.removeAll()
-            resume()
-        }
         switch action {
         case .engine(PWM_COMMAND_TOGGLE_SCRATCH, _) where switcher.isOpen:
             // ⌃⌥Esc while switching cancels, as Esc does in PaperWM.
@@ -184,6 +171,7 @@ final class WindowManager {
     private func publish() -> EngineState? {
         animate()
         settle()
+        recheck()
         guard let state = engine.state() else {
             decorations.refresh(focus: nil)
             return nil
@@ -203,6 +191,21 @@ final class WindowManager {
             MainActor.assumeIsolated {
                 self?.settleScheduled = false
                 self?.scheduleSync()
+            }
+        }
+    }
+
+    /// Syncs once more when a missing window may count as closed, since
+    /// nothing notifies then.
+    private func recheck() {
+        recheckGeneration += 1
+        guard let delay = engine.nextCheck else { return }
+        let generation = recheckGeneration
+        // At least a moment apart, should the window stay due.
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(delay + 0.05, 0.5)) { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.recheckGeneration == generation else { return }
+                self.scheduleSync()
             }
         }
     }
@@ -250,17 +253,7 @@ final class WindowManager {
         }
     }
 
-    /// Whether syncs are held, logging the first one held by each hold.
-    private func held() -> Bool {
-        if isHeld && !loggedHold {
-            loggedHold = true
-            log.notice("sync held: asleep \(self.asleepNames, privacy: .public)")
-        }
-        return isHeld
-    }
-
     func syncNow() {
-        guard !held() else { return }
         report { try engine.sync() }
         publish()
     }
@@ -276,9 +269,6 @@ final class WindowManager {
     /// Restarts the engine from scratch: forgets all layout and observers,
     /// then re-reads every app, window and monitor as on launch.
     func retile() {
-        // Re-tile is the way out of a pause that never ended.
-        asleep.removeAll()
-        heldUntil = 0
         frames.stop()
         syncDeferred = false
         engine = Engine()
@@ -289,7 +279,6 @@ final class WindowManager {
     }
 
     private func updateMonitors() {
-        guard !held() else { return }
         report {
             try engine.setMonitors(NSScreen.screens)
             try engine.sync()
@@ -358,67 +347,39 @@ final class WindowManager {
            app.activationPolicy == .regular {
             engine.observeApp(app.processIdentifier)
         }
-        wakeIfUnlocked()
         scheduleSync()
     }
 
     @objc private func somethingChanged(_ notification: Notification) {
         log.notice("\(Self.describe(notification), privacy: .public)")
+        if notification.name == NSWorkspace.activeSpaceDidChangeNotification {
+            engine.noteTransition()
+        }
         scheduleSync()
     }
 
     @objc private func screensChanged(_ notification: Notification) {
         let ids = NSScreen.screens.map { String($0.displayID) }.joined(separator: ", ")
         log.notice("screens changed: \(ids, privacy: .public)")
+        engine.noteTransition()
         updateMonitors()
     }
 
     @objc private func slept(_ notification: Notification) {
         log.notice("sleep: \(notification.name.rawValue, privacy: .public)")
-        asleep.insert(notification.name)
+        engine.noteTransition()
     }
 
-    /// Reads every monitor and window again once nothing sleeps any more:
-    /// syncs held meanwhile were dropped, and displays and apps come back
-    /// over a few seconds, refusing Accessibility requests for a while.
+    /// Reads every monitor and window again as displays and apps come back
+    /// over a few seconds; macOS moves windows itself when displays return.
     @objc private func woke(_ notification: Notification) {
-        guard let sleep = Self.wakes[notification.name] else { return }
-        asleep.remove(sleep)
-        let name = notification.name.rawValue
-        log.notice("wake: \(name, privacy: .public), still asleep: \(self.asleepNames, privacy: .public)")
-        if asleep.isEmpty {
-            resume()
-        } else {
-            wakeIfUnlocked()
-        }
-    }
-
-    /// Ends every pause once the user is back at an unlocked screen, so a
-    /// sleep whose wake never came cannot hold syncs for good.
-    private func wakeIfUnlocked() {
-        guard !asleep.isEmpty, Self.isUnlockedOnConsole() else { return }
-        log.notice("unlocked on console: ending the hold on \(self.asleepNames, privacy: .public)")
-        asleep.removeAll()
-        resume()
-    }
-
-    private func resume() {
-        guard asleep.isEmpty else { return }
-        log.notice("resume: re-reading monitors and windows at 0.6, 2, 5 and 10 s")
-        loggedHold = false
-        heldUntil = CACurrentMediaTime() + 0.5
-        for delay in [0.6, 2.0, 5.0, 10.0] {
+        log.notice("wake: \(notification.name.rawValue, privacy: .public)")
+        engine.noteTransition()
+        for delay in [1.0, 5.0] {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
                 MainActor.assumeIsolated { self?.updateMonitors() }
             }
         }
-    }
-
-    /// Whether this user's session is in front and the screen is not locked.
-    private static func isUnlockedOnConsole() -> Bool {
-        guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else { return false }
-        let onConsole = session["kCGSSessionOnConsoleKey"] as? Bool == true
-        return onConsole && session["CGSSessionScreenIsLocked"] as? Bool != true
     }
 }
 
