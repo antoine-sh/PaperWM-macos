@@ -337,9 +337,10 @@ impl Workspace {
         true
     }
 
-    /// Splits the focused column into one column per window, in order and at
-    /// its width, keeping the focused window focused. The first window keeps
-    /// the column and its pin; the stack's tabs and heights go away.
+    /// Splits the focused column into one column per window, at its width,
+    /// keeping the focused window focused. The first window keeps the column
+    /// and its pin, so under a right pin it ends up after the others; the
+    /// stack's tabs and heights go away.
     pub fn unstack(&mut self) -> bool {
         let Some(column) = self.columns.get_mut(self.focused) else { return false };
         if column.windows.len() < 2 {
@@ -822,6 +823,18 @@ mod tests {
         assert_eq!(ws.focused_window(), Some(2));
         assert!(ws.columns()[..3].iter().all(|c| c.width() == 300.0 && !c.is_tabbed()));
         assert!(!ws.unstack());
+
+        // A right-pinned stack keeps its pin on the first window, at the right edge.
+        let mut ws = workspace(&[300.0, 300.0, 300.0, 300.0]);
+        ws.focus_window(2);
+        ws.consume();
+        ws.consume();
+        assert!(ws.toggle_pin(Pin::Right, VIEW, 0.0));
+        ws.focus_window(3);
+        assert!(ws.unstack());
+        assert_eq!(layout(&ws), vec![vec![1], vec![3], vec![4], vec![2]]);
+        assert_eq!(ws.focused_window(), Some(3));
+        assert_eq!(ws.columns()[3].pinned(), Some(Pin::Right));
     }
 
     #[test]
