@@ -9,7 +9,7 @@
   A port of <a href="https://github.com/paperwm/PaperWM">PaperWM</a>, the scrollable tiling window manager, to macOS.
 </p>
 
-![PaperWM for macOS: focusing, moving, resizing and stacking columns, then switching workspace](docs/demo.gif)
+![PaperWM for macOS: focusing, moving, resizing and stacking columns](docs/demo.gif)
 
 <sub>A scripted model of the layout, rendered by `scripts/demo-gif.py`; not a screen recording.</sub>
 
@@ -26,7 +26,7 @@ fit, and you never drag a window into place again.
 ## ✨ Highlights
 
 - 📜 **Scrolling strip** of columns you can rearrange, resize, stack and tab from the keyboard
-- 🗂️ **Nine workspaces** per monitor, independent of macOS Spaces
+- 🖥️ **One strip per display**, independent of macOS Spaces
 - 🖐️ **Trackpad panning** and **drag to reorder** with the mouse
 - 🔀 **Window switcher** with live previews, and a **minimap** of the strip
 - 📌 **Pinned columns**, a **scratch layer** for floating windows, and **app rules**
@@ -37,21 +37,21 @@ fit, and you never drag a window into place again.
 
 - **Scrolling strip**: every window opens as a new column to the right of the focused one, focusing a column slides the strip to bring it into view, and columns can be rearranged, resized and stacked from the keyboard. Dialogs, sheets, other non-standard windows and fixed-size windows such as Calculator float. A window in native fullscreen is left alone and keeps its column, and goes back into it when it leaves fullscreen. Columns that scroll off screen are parked at the screen edge, since macOS doesn't allow hiding windows entirely off screen.
 - **Tabbed columns**: ⌃⌥T turns the focused column's stack into tabs: only the active window shows, at the column's full height, with the others behind it. A small tab bar along the bottom of the column lists its windows; click a tab, or use ⌃⌥↑/↓, to switch.
-- **Pinned columns**: pin a column to the left or right edge of the screen; it stays there at full height while the rest of the strip scrolls in the width beside it. One pin per side per workspace, and pins always leave room for a narrow column beside them; focus left and right still reaches a pin.
+- **Pinned columns**: pin a column to the left or right edge of the screen; it stays there at full height while the rest of the strip scrolls in the width beside it. One pin per side per strip, and pins always leave room for a narrow column beside them; focus left and right still reaches a pin.
 - **Drag to reorder**: drag a window by its title bar onto another column and let go: it takes that column's place and the strip rearranges around it. A window dragged out of a stack gets a column of its own, and dropping onto another monitor moves it into that monitor's strip.
 - **Native tabs**: a window with tabs (Finder, Terminal, Safari) is one column; opening, switching or closing tabs keeps it in place, and a tab dragged out into its own window gets a column of its own.
 - **Layout that survives**: windows keep their column, pins and tabs through sleep, the lock screen, fullscreen apps, Space switches and apps that stop responding for a while. A window leaves the strip only when it is closed, minimized or hidden (⌘H), or its app quits; one that an app closes to the background (Slack, Discord) leaves a few seconds later. A minimized or hidden window comes back as a new column.
-- **Workspaces**: nine PaperWM workspaces, independent of macOS Spaces (keep everything on one Space). Each monitor shows one; the others' windows are tucked into a screen corner. Focusing a window that lives on a hidden workspace (⌘Tab, Dock, a click on a notification) brings its workspace in.
-- **Monitors**: focus or move windows to the monitor on the left or right. A column that would spill onto another monitor is tucked away against the other edge. Each display keeps its workspace when another is unplugged or the main display changes, and gets it back when it reconnects (after sleep, say), even if macOS gives it a new display id.
-- **Scratch layer**: floating windows above the workspaces that you can show or hide together.
-- **Window switcher**: ⌃⌥Tab through recently used windows across all workspaces, with live previews if you grant Screen Recording permission (app icons otherwise).
-- **Trackpad**: hold ⌃⌥ (or the modifiers of your Switch Windows shortcut, if you changed it) and scroll with two fingers sideways to pan the strip (focus lands on the column in the middle when you let go), or up/down to switch workspace. macOS reserves three-finger swipes, so this stands in for PaperWM's.
+- **One strip per display**: each display has its own strip, independent of macOS Spaces (keep everything on one Space). ⌃⌥N moves focus to the next display; move windows to the display on the left or right. A column that would spill onto another display is tucked away against the other edge.
+- **Unplugged displays**: a display that goes away takes its strip with it; its windows are tucked into a screen corner and come back in place when it reconnects (after sleep, say), even if macOS gives it a new display id or the main display changed. Focusing one of those windows meanwhile (⌘Tab, Dock, a click on a notification) moves it into the strip of the display you are on.
+- **Scratch layer**: floating windows above the strips that you can show or hide together.
+- **Window switcher**: ⌃⌥Tab through recently used windows across all displays, with live previews if you grant Screen Recording permission (app icons otherwise).
+- **Trackpad**: hold ⌃⌥ (or the modifiers of your Switch Windows shortcut, if you changed it) and scroll with two fingers sideways to pan the strip (focus lands on the column in the middle when you let go). macOS reserves three-finger swipes, so this stands in for PaperWM's.
 - **Minimap**: an overview of the strip appears briefly while you navigate. In Settings, pick the strip view or a small toolbar of app icons along the bottom of the screen (one per column, focused one highlighted).
 - **Focus highlight**: optionally draw a colored border around the focused window and dim the windows behind it. Both are off by default; turn them on from the menu, Settings or their shortcuts. With Screen Recording permission the border matches each window's own rounded corners; otherwise it uses the corner radius set in Settings.
-- **App rules**: in Settings › Apps, pick an app from the running ones (or from the Applications folder) and either float it, so its windows are never tiled or moved and stay on every workspace like dialogs, or give it a fixed slot: its windows open at a set column of a set workspace. Apps are matched by name. Fixed-size windows float even when their app has a slot.
+- **App rules**: in Settings › Apps, pick an app from the running ones (or from the Applications folder) and either float it, so its windows are never tiled or moved, like dialogs, or give it a fixed slot: its windows open at a set column of the strip of the display they appear on. Apps are matched by name. Fixed-size windows float even when their app has a slot.
 - **Welcome guide**: at launch whenever Accessibility access is missing (so on first launch), a short guide explains the strip, walks through the Accessibility and (optional) Screen Recording permissions, and lists the first shortcuts to learn. Reopen it from the menu with Welcome Guide….
-- **Menu bar**: shows the current workspace's name; the menu switches workspaces, toggles the focus border and dimming, and opens Settings and the welcome guide.
-- **Settings** (⌘, from the menu): launch at login, gaps, column width presets, the widen / narrow step, scroll animation length (0 turns it off), whether to keep the focused column centred (never, when the columns overflow the screen, or always), keep original height (off by default: a window alone in its column keeps the height it had when first tiled, top-aligned, instead of filling the screen; stacked columns still split the full height), workspace names, app rules, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
+- **Menu bar**: the menu toggles the focus border and dimming, and opens Settings and the welcome guide.
+- **Settings** (⌘, from the menu): launch at login, gaps, column width presets, the widen / narrow step, scroll animation length (0 turns it off), whether to keep the focused column centred (never, when the columns overflow the screen, or always), keep original height (off by default: a window alone in its column keeps the height it had when first tiled, top-aligned, instead of filling the screen; stacked columns still split the full height), app rules, minimap style, border color and width, dim strength, and every shortcut can be re-recorded.
 
 </details>
 
@@ -69,21 +69,11 @@ fit, and you never drag a window into place again.
 | ⌃⌥⇧ ← / → | Move the column left / right |
 | ⌃⌥⇧ ↑ / ↓ | Move the window up / down in its column |
 
-**Workspaces**
-
-| Shortcut | Action |
-| --- | --- |
-| ⌃⌥ 1…9 | Switch to workspace 1…9 |
-| ⌃⌥⇧ 1…9 | Move the window to workspace 1…9 |
-| ⌃⌥ [ / ] | Previous / next workspace |
-| ⌃⌥⇧ [ / ] | Move the window to the previous / next workspace |
-| ⌃⌥ \` | Back to the last used workspace |
-
 **Monitors**
 
 | Shortcut | Action |
 | --- | --- |
-| ⌃⌥ , / . | Focus the monitor on the left / right |
+| ⌃⌥ N | Focus the next monitor |
 | ⌃⌥⇧ , / . | Move the window to the monitor on the left / right |
 
 **Size**
@@ -128,7 +118,7 @@ fit, and you never drag a window into place again.
 
 ## 🩺 Diagnostics
 
-PaperWM logs why each window joined or left the layout, what each read of the windows saw, how displays map to workspaces, and the sleep, wake, Space and app events around them. Window titles are never logged. To watch it live:
+PaperWM logs why each window joined or left the layout, what each read of the windows saw, how displays map to strips, and the sleep, wake, Space and app events around them. Window titles are never logged. To watch it live:
 
 ```sh
 log stream --level info --predicate 'subsystem == "io.github.antoine-sh.PaperWM"'
@@ -163,7 +153,7 @@ cargo test
 
 | Path | Contents |
 | --- | --- |
-| `engine/` | Rust engine: scrolling layout (`workspace.rs`, `placement.rs`), workspaces, monitors, scratch layer, window sync and commands (`engine.rs`), macOS Accessibility backend (`macos/`), C interface (`ffi.rs`, `include/paperwm_engine.h`) |
+| `engine/` | Rust engine: scrolling layout (`workspace.rs`, `placement.rs`), one strip per monitor, scratch layer, window sync and commands (`engine.rs`), macOS Accessibility backend (`macos/`), C interface (`ffi.rs`, `include/paperwm_engine.h`) |
 | `app/` | Swift menu bar app (SwiftPM package): hot keys, welcome guide, settings, minimap, switcher, trackpad gestures, window drops, app and monitor tracking; links the engine as a static library |
 | `scripts/build-app.sh` | Builds both and assembles `build/PaperWM.app` |
 | `scripts/make-dmg.sh` | Packages the app as a `.dmg` |

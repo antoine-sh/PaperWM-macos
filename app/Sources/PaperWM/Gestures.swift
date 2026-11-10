@@ -2,21 +2,16 @@ import AppKit
 import CPaperWMEngine
 
 /// Trackpad navigation: with Super held (⌃⌥, or the switcher shortcut's
-/// modifiers), two-finger horizontal scrolling pans the strip and vertical
-/// scrolling switches workspaces. macOS keeps three-finger swipes to itself,
-/// so this stands in for PaperWM's.
+/// modifiers), two-finger horizontal scrolling pans the strip. macOS keeps
+/// three-finger swipes to itself, so this stands in for PaperWM's.
 @MainActor
 final class Gestures {
-    /// Vertical travel, in points, that switches workspace.
-    private static let workspaceThreshold = 60.0
     /// Quiet time after which a gesture, momentum included, is over.
     private static let endDelay = 0.15
 
     private let perform: (Action) -> Void
     private var tap: ScrollTap?
     private var panned = false
-    private var vertical = 0.0
-    private var switched = false
     private var endTimer: Timer?
     /// Modifiers that must be held, kept until the tap exists.
     private var required: NSEvent.ModifierFlags = [.control, .option]
@@ -47,18 +42,10 @@ final class Gestures {
 
     /// Handles the scrolling gathered since the last call.
     private func handle(dx: Double, dy: Double) {
-        if abs(dx) >= abs(dy) {
-            if dx != 0 {
-                // The strip follows the fingers.
-                perform(.engine(PWM_COMMAND_SCROLL_BY, -dx))
-                panned = true
-            }
-        } else if !switched {
-            vertical += dy
-            if abs(vertical) >= Self.workspaceThreshold {
-                perform(.engine(vertical < 0 ? PWM_COMMAND_NEXT_WORKSPACE : PWM_COMMAND_PREVIOUS_WORKSPACE))
-                switched = true
-            }
+        if abs(dx) >= abs(dy), dx != 0 {
+            // The strip follows the fingers.
+            perform(.engine(PWM_COMMAND_SCROLL_BY, -dx))
+            panned = true
         }
 
         let fireDate = Date(timeIntervalSinceNow: Self.endDelay)
@@ -77,8 +64,6 @@ final class Gestures {
         endTimer = nil
         if panned { perform(.engine(PWM_COMMAND_SCROLL_END)) }
         panned = false
-        vertical = 0
-        switched = false
     }
 }
 

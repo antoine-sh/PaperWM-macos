@@ -56,11 +56,6 @@ struct SettingsView: View {
                     }
                 ))
             }
-            Section("Workspace names") {
-                ForEach(0..<settings.values.workspaceNames.count, id: \.self) { index in
-                    TextField("Workspace \(index + 1)", text: $settings.values.workspaceNames[index])
-                }
-            }
         }
     }
 
@@ -174,7 +169,7 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 ForEach(settings.values.appRules) { rule in
-                    AppRuleRow(rule: binding(for: rule), workspaceNames: settings.values.workspaceNames) {
+                    AppRuleRow(rule: binding(for: rule)) {
                         settings.values.appRules.removeAll { $0.id == rule.id }
                     }
                 }
@@ -197,8 +192,8 @@ struct SettingsView: View {
             } header: {
                 Text("App rules")
             } footer: {
-                Text("Floating apps are left where they are, on every workspace, like dialogs. "
-                     + "An app with a slot opens at that column of that workspace; you can still move it after.")
+                Text("Floating apps are left where they are, like dialogs. "
+                     + "An app with a slot opens at that column of its display's strip; you can still move it after.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -311,10 +306,9 @@ struct SettingsView: View {
     }
 }
 
-/// One app's rule: float it, or pin it to a workspace and column.
+/// One app's rule: float it, or pin it to a column.
 private struct AppRuleRow: View {
     @Binding var rule: AppRule
-    let workspaceNames: [String]
     let onRemove: () -> Void
 
     var body: some View {
@@ -329,14 +323,6 @@ private struct AppRuleRow: View {
             .labelsHidden()
             .fixedSize()
             if rule.action == .slot {
-                Picker("Workspace", selection: $rule.workspace) {
-                    ForEach(0..<workspaceNames.count, id: \.self) { index in
-                        Text(workspaceNames[index].isEmpty ? "Workspace \(index + 1)" : workspaceNames[index])
-                            .tag(index)
-                    }
-                }
-                .labelsHidden()
-                .fixedSize()
                 Stepper("Column \(rule.column + 1)", value: $rule.column, in: 0...19)
                     .fixedSize()
             }

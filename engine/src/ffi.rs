@@ -225,7 +225,7 @@ pub unsafe extern "C" fn pwm_engine_drop(engine: *mut Engine, x: f64, y: f64) ->
     status(guarded(|| engine.drop_at(x, y)))
 }
 
-/// Runs one of the `PWM_COMMAND_*` actions. `arg` is the workspace index,
+/// Runs one of the `PWM_COMMAND_*` actions. `arg` is the
 /// window id or scroll distance for commands that take one, else ignored.
 /// `changed`, if not null, is set to whether the command changed anything.
 ///
@@ -518,15 +518,6 @@ mod tests {
             ("CENTER", Command::Center),
             ("CONSUME", Command::Consume),
             ("EXPEL", Command::Expel),
-            ("SWITCH_WORKSPACE", Command::SwitchWorkspace(1)),
-            ("MOVE_TO_WORKSPACE", Command::MoveToWorkspace(1)),
-            ("NEXT_WORKSPACE", Command::NextWorkspace),
-            ("PREVIOUS_WORKSPACE", Command::PreviousWorkspace),
-            ("MOVE_TO_NEXT_WORKSPACE", Command::MoveToNextWorkspace),
-            ("MOVE_TO_PREVIOUS_WORKSPACE", Command::MoveToPreviousWorkspace),
-            ("LAST_WORKSPACE", Command::LastWorkspace),
-            ("FOCUS_MONITOR_LEFT", Command::FocusMonitorLeft),
-            ("FOCUS_MONITOR_RIGHT", Command::FocusMonitorRight),
             ("MOVE_TO_MONITOR_LEFT", Command::MoveToMonitorLeft),
             ("MOVE_TO_MONITOR_RIGHT", Command::MoveToMonitorRight),
             ("TOGGLE_SCRATCH", Command::ToggleScratch),
@@ -544,11 +535,17 @@ mod tests {
             ("TALLER", Command::Taller),
             ("SHORTER", Command::Shorter),
             ("EQUAL_HEIGHTS", Command::EqualHeights),
+            ("FOCUS_NEXT_MONITOR", Command::FocusNextMonitor),
         ];
         for (name, command) in commands {
             assert_eq!(Command::parse(value(&format!("PWM_COMMAND_{name}")), 1.0), Some(command), "{name}");
         }
-        assert_eq!(Command::parse(commands.len() as u32, 1.0), None, "a command is missing from the header");
+        let codes: Vec<u32> = commands.iter().map(|(name, _)| value(&format!("PWM_COMMAND_{name}"))).collect();
+        for code in 0..=codes.iter().max().unwrap() + 1 {
+            if !codes.contains(&code) {
+                assert_eq!(Command::parse(code, 1.0), None, "command {code} is missing from the header");
+            }
+        }
         let statuses = [
             ("OK", PwmStatus::Ok),
             ("NOT_TRUSTED", PwmStatus::NotTrusted),

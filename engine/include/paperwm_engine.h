@@ -12,7 +12,7 @@
 extern "C" {
 #endif
 
-// Number of workspaces; workspace indices run from 0 to PWM_WORKSPACE_COUNT - 1.
+// Number of strips the engine keeps (one per display); indices run from 0 to PWM_WORKSPACE_COUNT - 1.
 #define PWM_WORKSPACE_COUNT 9
 
 typedef enum {
@@ -39,15 +39,7 @@ typedef enum {
     PWM_COMMAND_CENTER = 10,
     PWM_COMMAND_CONSUME = 11,
     PWM_COMMAND_EXPEL = 12,
-    PWM_COMMAND_SWITCH_WORKSPACE = 13,          // arg: workspace index
-    PWM_COMMAND_MOVE_TO_WORKSPACE = 14,         // arg: workspace index
-    PWM_COMMAND_NEXT_WORKSPACE = 15,
-    PWM_COMMAND_PREVIOUS_WORKSPACE = 16,
-    PWM_COMMAND_MOVE_TO_NEXT_WORKSPACE = 17,
-    PWM_COMMAND_MOVE_TO_PREVIOUS_WORKSPACE = 18,
-    PWM_COMMAND_LAST_WORKSPACE = 19,
-    PWM_COMMAND_FOCUS_MONITOR_LEFT = 20,
-    PWM_COMMAND_FOCUS_MONITOR_RIGHT = 21,
+    // 13 to 21 were the workspace and monitor-focus commands.
     PWM_COMMAND_MOVE_TO_MONITOR_LEFT = 22,
     PWM_COMMAND_MOVE_TO_MONITOR_RIGHT = 23,
     PWM_COMMAND_TOGGLE_SCRATCH = 24,
@@ -65,6 +57,7 @@ typedef enum {
     PWM_COMMAND_TALLER = 36,
     PWM_COMMAND_SHORTER = 37,
     PWM_COMMAND_EQUAL_HEIGHTS = 38,
+    PWM_COMMAND_FOCUS_NEXT_MONITOR = 39,
 } PwmCommand;
 
 // Top-left origin, y grows downwards (Accessibility coordinates).
@@ -111,7 +104,7 @@ void pwm_window_list_free(PwmWindowList list);
 const char *pwm_last_error(void);
 
 // Display id (CGDirectDisplayID) and usable area (Accessibility coordinates)
-// of each monitor, main one first. Each display keeps its workspace by id.
+// of each monitor, main one first. Each display keeps its strip by id.
 PwmStatus pwm_engine_set_monitors(PwmEngine *engine, const uint32_t *ids, const PwmRect *areas, size_t count);
 
 // Brings the layout up to date with the current windows and focus.
@@ -146,10 +139,10 @@ void pwm_engine_note_transition(const PwmEngine *engine);
 // nothing notifies, so call it then; negative if no window is waiting.
 double pwm_engine_next_check(const PwmEngine *engine);
 
-// Settings as JSON: {"gap": 8, "width_presets": [0.33, 0.5], "workspace_names": ["1", ...],
+// Settings as JSON: {"gap": 8, "width_presets": [0.33, 0.5],
 // "animation_duration": 0.25, "center_focused": "never" | "on_overflow" | "always",
 // "app_rules": [{"app": "Calculator", "action": "float"},
-//               {"app": "Mail", "action": "slot", "workspace": 1, "column": 0}]}.
+//               {"app": "Mail", "action": "slot", "column": 0}]}.
 // Missing fields keep their defaults; malformed JSON returns INVALID_ARGUMENT.
 PwmStatus pwm_engine_set_config(PwmEngine *engine, const char *json);
 

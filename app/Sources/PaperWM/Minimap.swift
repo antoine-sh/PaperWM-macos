@@ -83,7 +83,6 @@ struct StripView: View {
         let scale = width / max(stripWidth, viewport)
 
         VStack(alignment: .leading, spacing: 8) {
-            Text(workspace.name).font(.headline)
             ZStack(alignment: .topLeading) {
                 ForEach(Array(workspace.columns.enumerated()), id: \.offset) { index, column in
                     columnView(column, focused: index == workspace.focusedColumn, scale: scale)
@@ -139,7 +138,7 @@ struct ToolbarView: View {
 
         HStack(spacing: 6) {
             if workspace.columns.isEmpty {
-                Text(workspace.name).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 6)
+                Text("Empty").font(.caption).foregroundStyle(.secondary).padding(.horizontal, 6)
             }
             ForEach(Array(workspace.columns.enumerated()), id: \.offset) { index, column in
                 icon(column, size: iconSize)

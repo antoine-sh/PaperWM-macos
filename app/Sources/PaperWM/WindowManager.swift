@@ -11,8 +11,6 @@ final class WindowManager {
     private(set) lazy var hotKeys = HotKeyCenter { [weak self] action in
         self?.perform(action)
     }
-    /// Called with the new layout after every sync or command.
-    var onStateChange: ((EngineState) -> Void)?
     private let minimap = Minimap()
     private let switcher = Switcher()
     private let decorations = Decorations()
@@ -181,7 +179,6 @@ final class WindowManager {
         }
         decorations.refresh(focus: state.focusedWindow)
         tabBars.update(state)
-        onStateChange?(state)
         return state
     }
 
