@@ -2,9 +2,9 @@ import AppKit
 
 /// Highlights the focused window: a colored border around it and a dim over
 /// everything behind it. Both are click-through panels drawn with layers, so
-/// moving them is left to the GPU. The engine says which window is focused;
-/// the window server says where it is, which also covers windows PaperWM
-/// doesn't tile and windows being dragged.
+/// moving them is left to the GPU. The engine says which window is focused
+/// and where it just put it; the window server says where other windows are,
+/// which covers windows PaperWM doesn't tile and windows being dragged.
 @MainActor
 final class Decorations {
     private let border: NSPanel
@@ -22,6 +22,11 @@ final class Decorations {
     /// Measured corner radius of recently seen windows; nil while measuring
     /// or when it couldn't be measured.
     private var radii: [CGWindowID: CGFloat?] = [:]
+    /// When a frame from the engine last placed the decorations. The window
+    /// server reports a window's frame only once its app has redrawn there,
+    /// so for a moment after, its frames are older than the engine's.
+    private var placedAt: CFTimeInterval = 0
+    private var checkScheduled = false
     private static let ownPID = ProcessInfo.processInfo.processIdentifier
 
     private var isActive: Bool { values.focusBorder || values.dimBackground }
@@ -53,19 +58,35 @@ final class Decorations {
     }
 
     /// Finds the focused window again, after focus may have changed.
-    /// `focus` is the engine's focused window, if it knows one.
-    func refresh(focus: CGWindowID?) {
+    /// `focus` is the engine's focused window, if it knows one; `placed`
+    /// gives where the engine just put a window, if it did.
+    func refresh(focus: CGWindowID?, placed: @MainActor (CGWindowID) -> CGRect? = { _ in nil }) {
         engineFocus = focus
         guard isActive else {
             hide()
             return
         }
-        let window = focus.flatMap(Self.window) ?? Self.frontWindow()
+        let window = focus.flatMap { locate($0, placed: placed) } ?? Self.frontWindow()
         show(window, raised: window?.id != focused?.id)
-        // Without the polling timer, catch a window that settles a moment
-        // after it was placed, e.g. one that refused its size.
+        scheduleCheck()
+    }
+
+    /// Asks the window server again shortly, to catch a window that settles a
+    /// moment after it was placed, e.g. one that refused its size.
+    private func scheduleCheck() {
+        guard !checkScheduled else { return }
+        checkScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
-            MainActor.assumeIsolated { self?.track() }
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.checkScheduled = false
+                // Still being moved by the engine: wait until it stops.
+                if CACurrentMediaTime() - self.placedAt < Self.serverLag {
+                    self.scheduleCheck()
+                } else {
+                    self.track()
+                }
+            }
         }
     }
 
@@ -84,11 +105,30 @@ final class Decorations {
         self.timer = timer
     }
 
-    /// Follows the focused window when it moves, e.g. during a slide or a drag.
-    func track() {
+    /// Follows the focused window when it moves, e.g. during a slide or a
+    /// drag. `placed` gives where the engine just put a window, if it did.
+    func track(placed: @MainActor (CGWindowID) -> CGRect? = { _ in nil }) {
         guard isActive, let id = focused?.id else { return }
-        let window = Self.window(id)
+        let window = locate(id, placed: placed)
         if window?.frame != focused?.frame { show(window, raised: false) }
+    }
+
+    /// How long the window server's frames may trail the engine's.
+    private static let serverLag: CFTimeInterval = 0.1
+
+    /// Where window `id` is, if it is another app's window on screen: where
+    /// the engine just put it, else where the window server last drew it.
+    private func locate(_ id: CGWindowID,
+                        placed: @MainActor (CGWindowID) -> CGRect?) -> (id: CGWindowID, frame: CGRect)? {
+        guard let window = Self.window(id) else { return nil }
+        if let frame = placed(id) {
+            placedAt = CACurrentMediaTime()
+            scheduleCheck()
+            return (id, frame)
+        }
+        // Right after the engine moved it, the window server's frame is stale.
+        if CACurrentMediaTime() - placedAt < Self.serverLag, let focused, focused.id == id { return focused }
+        return window
     }
 
     func hide() {

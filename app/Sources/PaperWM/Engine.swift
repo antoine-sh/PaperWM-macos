@@ -154,6 +154,13 @@ final class Engine {
     /// Whether a strip is sliding, so `tick` should run every frame.
     var isAnimating: Bool { pwm_engine_is_animating(handle) }
 
+    /// Where the engine last put managed window `id`, in Accessibility
+    /// coordinates; nil for unmanaged and fullscreen windows.
+    func placedFrame(_ id: CGWindowID) -> CGRect? {
+        var rect = PwmRect()
+        return pwm_engine_placed_frame(handle, id, &rect) ? CGRect(rect) : nil
+    }
+
     /// Whether the last sync met a window still being created, so another
     /// sync should follow shortly.
     var isSettling: Bool { pwm_engine_is_settling(handle) }

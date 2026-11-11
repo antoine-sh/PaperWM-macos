@@ -959,6 +959,13 @@ impl Engine {
         self.animator.is_animating()
     }
 
+    /// Where the engine last put managed window `id`, unless it is
+    /// fullscreen. The window server reports a frame only once the app has
+    /// redrawn there, a frame or more later, so the UI follows this instead.
+    pub fn placed_frame(&self, id: WindowId) -> Option<Rect> {
+        self.applier.placed(id).filter(|_| self.info.get(&id).is_some_and(|w| !w.is_fullscreen))
+    }
+
     fn snap_all(&mut self) {
         for (index, ws) in self.workspaces.iter().enumerate() {
             self.animator.snap(index, ws.scroll());
@@ -1371,6 +1378,22 @@ mod tests {
         engine.sync().unwrap();
         assert!(engine.workspace(0).unwrap().windows().next().is_none());
         assert_eq!(backend.frame_of(1).unwrap().x, RIGHT.x + (RIGHT.width - 300.0) / 2.0);
+    }
+
+    #[test]
+    fn placed_frame_is_where_the_engine_just_put_a_window_mid_slide() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 600.0), window(2, 700.0, 600.0)]);
+        engine.set_config(Config { animation_duration: 0.2, ..Config::default() }).unwrap();
+        engine.sync().unwrap();
+        engine.command(Command::FocusRight).unwrap();
+        engine.tick(0.05).unwrap();
+        assert!(engine.is_animating());
+        assert_eq!(engine.placed_frame(2), backend.frame_of(2));
+        assert_eq!(engine.placed_frame(3), None);
+
+        backend.update(2, |w| w.is_fullscreen = true);
+        engine.sync().unwrap();
+        assert_eq!(engine.placed_frame(2), None);
     }
 
     #[test]
@@ -2573,6 +2596,29 @@ mod tests {
         let calls = backend.set_frame_calls();
         engine.sync().unwrap();
         assert_eq!(backend.set_frame_calls(), calls);
+        assert_eq!(engine.placed_frame(1), Some(refused));
+    }
+
+    #[test]
+    fn placed_frame_keeps_a_refused_size_through_a_slide() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 900.0)]);
+        engine.set_config(Config { animation_duration: 0.2, ..Config::default() }).unwrap();
+        // Windows are only observed once the strip stops sliding.
+        let sync = |engine: &mut Engine| {
+            engine.sync().unwrap();
+            engine.tick(1.0).unwrap();
+        };
+        sync(&mut engine);
+        let refused = Rect { width: 500.0, ..backend.frame_of(1).unwrap() };
+        backend.update(1, |w| w.frame = refused);
+        sync(&mut engine);
+        backend.update(1, |w| w.frame = refused);
+        sync(&mut engine);
+        engine.command(Command::FocusLeft).unwrap();
+        engine.tick(0.05).unwrap();
+        assert!(engine.is_animating());
+        assert_ne!(backend.frame_of(1).unwrap().x, refused.x);
+        assert_eq!(engine.placed_frame(1), backend.frame_of(1));
     }
 
     #[test]
