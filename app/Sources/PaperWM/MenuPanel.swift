@@ -148,7 +148,7 @@ struct MenuPanelView: View {
                 Divider()
                 controls
             }
-            .padding(.horizontal, 24)
+            .padding(.horizontal, 20)
             .padding(.vertical, 16)
             Divider()
             // An ideal width of 0 keeps a long footer from widening the panel; it truncates instead.
@@ -157,7 +157,7 @@ struct MenuPanelView: View {
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
-                .padding(.horizontal, 24)
+                .padding(.horizontal, 20)
                 .padding(.vertical, 10)
         }
         // Sized to the columns, so the side padding is never squeezed.
