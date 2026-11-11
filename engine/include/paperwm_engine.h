@@ -59,6 +59,7 @@ typedef enum {
     PWM_COMMAND_EQUAL_HEIGHTS = 38,
     PWM_COMMAND_FOCUS_NEXT_MONITOR = 39,
     PWM_COMMAND_UNSTACK = 40,
+    PWM_COMMAND_SET_WIDTH = 41,                 // arg: fraction of the screen, in (0, 1]
 } PwmCommand;
 
 // Top-left origin, y grows downwards (Accessibility coordinates).
@@ -118,6 +119,17 @@ PwmStatus pwm_engine_drop(PwmEngine *engine, double x, double y);
 // `command` is a PwmCommand value; `arg` is ignored by commands without one.
 // `changed`, if not null, is set to whether the command changed anything.
 PwmStatus pwm_engine_command(PwmEngine *engine, uint32_t command, double arg, bool *changed);
+
+// Regroups the active strip's windows, in order, into `count` columns: column
+// i takes rows[i] windows (at least 1) and fractions[i] of the screen (in
+// (0, 1]). Windows past the layout keep a column each; pinned columns stay.
+// `changed`, if not null, is set to whether anything changed.
+PwmStatus pwm_engine_arrange(PwmEngine *engine, const uint32_t *rows, const double *fractions, size_t count,
+                             bool *changed);
+
+// Brings every managed window fully on screen, for when tiling is turned off.
+// The engine keeps its layout; make a new one to tile again.
+PwmStatus pwm_engine_release(PwmEngine *engine);
 
 // Advances strip slides by `seconds` and moves the windows. Returns whether a
 // strip is still sliding; call again on the next frame if so. `status`, if not

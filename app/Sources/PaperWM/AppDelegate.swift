@@ -1,12 +1,22 @@
 import AppKit
+import SwiftUI
 import CPaperWMEngine
 
 /// Menu bar app hosting the window manager.
 @main
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSPopoverDelegate {
     private var manager: WindowManager?
     private var statusItem: NSStatusItem?
+    /// Right-click menu, and the left-click one until tiling has started.
+    private let menu = NSMenu()
+    private let popover = NSPopover()
+    private let panel = PanelModel()
+    /// Closes the panel on a click in another app, which a transient popover
+    /// of an app that is not active does not always notice.
+    private var outsideClicks: Any?
+    /// A click on the icon can close the panel on mouse-down before its action runs on mouse-up.
+    private var popoverClosed = Date.distantPast
     private var trustTimer: Timer?
     private let settingsWindow = SettingsWindowController()
     private let onboarding = OnboardingWindowController()
@@ -22,10 +32,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         item.button?.image = NSImage(systemSymbolName: "rectangle.split.3x1", accessibilityDescription: "PaperWM")
-        let menu = NSMenu()
+        item.button?.target = self
+        item.button?.action = #selector(statusItemClicked(_:))
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         menu.delegate = self
-        item.menu = menu
         statusItem = item
+        popover.behavior = .transient
+        popover.delegate = self
+        popover.contentViewController = NSHostingController(rootView: MenuPanelView(model: panel))
+        panel.perform = { [weak self] action in self?.panelAction(action) }
 
         if Engine.isTrusted() {
             startManager()
@@ -55,6 +70,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         manager.start()
     }
 
+    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        guard let manager, NSApp.currentEvent?.type != .rightMouseUp else {
+            // Shows the menu as if the item owned it.
+            statusItem?.menu = menu
+            sender.performClick(nil)
+            statusItem?.menu = nil
+            return
+        }
+        if popover.isShown {
+            popover.performClose(nil)
+            return
+        }
+        // That same click closed it a moment ago; leave it closed.
+        guard Date().timeIntervalSince(popoverClosed) > 0.3 else { return }
+        refreshPanel(manager.engine.state())
+        manager.onPublish = { [weak self] state in self?.refreshPanel(state) }
+        popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+        outsideClicks = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) {
+            [weak self] _ in
+            MainActor.assumeIsolated { self?.popover.performClose(nil) }
+        }
+    }
+
+    private func refreshPanel(_ state: EngineState?) {
+        guard let manager else { return }
+        panel.state = state
+        panel.enabled = manager.isEnabled
+        // The widths Cycle Column Width steps through, then full width.
+        panel.presets = Set(manager.settings.values.widthPresets.filter { $0 > 0 && $0 < 1 } + [1]).sorted()
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        if let outsideClicks { NSEvent.removeMonitor(outsideClicks) }
+        outsideClicks = nil
+        manager?.onPublish = nil
+        panel.hovered = nil
+        popoverClosed = Date()
+    }
+
+    private func panelAction(_ action: PanelAction) {
+        guard let manager else { return }
+        switch action {
+        case .setWidth(let fraction):
+            manager.perform(.engine(PWM_COMMAND_SET_WIDTH, fraction))
+        case .arrange(let layout):
+            manager.arrange(layout.columns.map { (rows: $0.rows, fraction: $0.fraction) })
+        case .focus(let id):
+            manager.perform(.engine(PWM_COMMAND_FOCUS_WINDOW, Double(id)))
+        case .setEnabled(let enabled):
+            manager.setEnabled(enabled)
+            refreshPanel(enabled ? manager.engine.state() : nil)
+        case .settings:
+            popover.performClose(nil)
+            openSettings()
+        case .retile:
+            retile()
+        case .guide:
+            popover.performClose(nil)
+            showOnboarding()
+        case .quit:
+            NSApp.terminate(nil)
+        }
+    }
+
     // Rebuilt on every open so the permission state is current.
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
@@ -71,7 +150,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             dim.state = manager.settings.values.dimBackground ? .on : .off
             menu.addItem(dim)
             menu.addItem(.separator())
-            menu.addItem(action("Re-tile Now", #selector(retile)))
+            let tiling = action("Tiling", #selector(toggleTiling))
+            tiling.state = manager.isEnabled ? .on : .off
+            menu.addItem(tiling)
+            if manager.isEnabled { menu.addItem(action("Re-tile Now", #selector(retile))) }
             let shortcuts = NSMenuItem(title: "Keyboard Shortcuts", action: nil, keyEquivalent: "")
             let submenu = NSMenu()
             for hotKey in manager.hotKeys.hotKeys {
@@ -103,6 +185,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settingsWindow.show(settings: manager.settings, failed: manager.hotKeys.failed) { [weak manager] recording in
             manager?.setHotKeysPaused(recording)
         }
+    }
+
+    @objc private func toggleTiling() {
+        guard let manager else { return }
+        manager.setEnabled(!manager.isEnabled)
     }
 
     @objc private func retile() {

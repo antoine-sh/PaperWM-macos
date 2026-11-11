@@ -255,6 +255,60 @@ pub unsafe extern "C" fn pwm_engine_command(
     status(result)
 }
 
+/// Regroups the active strip's windows, in order, into `count` columns:
+/// column `i` takes `rows[i]` windows (at least 1) and `fractions[i]` of the
+/// screen (in (0, 1]). Windows past the layout keep a column each; pinned
+/// columns stay. `changed`, if not null, is set to whether anything changed.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null. `rows`
+/// and `fractions` must each point to `count` values. `changed` must be
+/// valid for writes, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_arrange(
+    engine: *mut Engine,
+    rows: *const u32,
+    fractions: *const f64,
+    count: usize,
+    changed: *mut bool,
+) -> PwmStatus {
+    if let Some(changed) = changed.as_mut() {
+        *changed = false;
+    }
+    let Some(engine) = engine.as_mut() else {
+        return PwmStatus::NullPointer;
+    };
+    if rows.is_null() || fractions.is_null() || count == 0 {
+        return PwmStatus::InvalidArgument;
+    }
+    let layout: Vec<(usize, f64)> = std::slice::from_raw_parts(rows, count)
+        .iter()
+        .zip(std::slice::from_raw_parts(fractions, count))
+        .map(|(&r, &f)| (r as usize, f))
+        .collect();
+    if layout.iter().any(|&(r, f)| r == 0 || !(f > 0.0 && f <= 1.0)) {
+        return PwmStatus::InvalidArgument;
+    }
+    let result = guarded(|| engine.arrange(&layout));
+    if let (Ok(true), Some(changed)) = (&result, changed.as_mut()) {
+        *changed = true;
+    }
+    status(result)
+}
+
+/// Brings every managed window fully on screen, for when tiling is turned
+/// off. The engine keeps its layout; make a new one to tile again.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_release(engine: *mut Engine) -> PwmStatus {
+    let Some(engine) = engine.as_ref() else {
+        return PwmStatus::NullPointer;
+    };
+    status(guarded(|| engine.release()))
+}
+
 /// Advances strip slides by `seconds` and moves the windows. Returns
 /// whether a strip is still sliding; call again on the next frame if so.
 /// `status`, if not null, receives the outcome; a strip whose windows could
@@ -537,6 +591,7 @@ mod tests {
             ("EQUAL_HEIGHTS", Command::EqualHeights),
             ("FOCUS_NEXT_MONITOR", Command::FocusNextMonitor),
             ("UNSTACK", Command::Unstack),
+            ("SET_WIDTH", Command::SetWidth(1.0)),
         ];
         for (name, command) in commands {
             assert_eq!(Command::parse(value(&format!("PWM_COMMAND_{name}")), 1.0), Some(command), "{name}");

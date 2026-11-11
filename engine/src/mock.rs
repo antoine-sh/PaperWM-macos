@@ -31,6 +31,8 @@ pub struct MockBackend {
     settling: Cell<bool>,
     /// Every window `focus` raised, oldest first; the last is frontmost.
     raised: RefCell<Vec<WindowId>>,
+    /// Windows that are listed but refuse to be moved, as a hung app's do.
+    refusing: RefCell<Vec<WindowId>>,
 }
 
 impl MockBackend {
@@ -166,6 +168,11 @@ impl MockBackend {
         self.focus_is_async.set(value);
     }
 
+    /// Makes `set_frame` fail for these windows while `windows` still lists them.
+    pub fn set_refusing(&self, ids: Vec<WindowId>) {
+        *self.refusing.borrow_mut() = ids;
+    }
+
     /// Makes `windows` skip the app `pid`'s windows, as if it were busy.
     pub fn set_unresponsive(&self, pids: Vec<i32>) {
         *self.unresponsive.borrow_mut() = pids;
@@ -228,7 +235,7 @@ impl WindowBackend for MockBackend {
         self.set_frame_calls.set(self.set_frame_calls.get() + 1);
         let mut windows = self.windows.borrow_mut();
         let window = windows.iter().find(|w| w.id == id).ok_or(BackendError::WindowNotFound(id))?;
-        if self.unresponsive.borrow().contains(&window.pid) {
+        if self.unresponsive.borrow().contains(&window.pid) || self.refusing.borrow().contains(&id) {
             return Err(BackendError::Platform("app is not responding".into()));
         }
         // Like a window whose AX size is not settable, which the frame write sets first.

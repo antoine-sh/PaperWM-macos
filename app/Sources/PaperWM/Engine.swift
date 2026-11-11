@@ -122,6 +122,27 @@ final class Engine {
         return changed
     }
 
+    /// Regroups the active strip's windows, in order, into columns of `rows`
+    /// windows at `fraction` of the screen each. Returns whether it changed anything.
+    @discardableResult
+    func arrange(_ layout: [(rows: Int, fraction: Double)]) throws -> Bool {
+        let rows = layout.map { UInt32($0.rows) }
+        let fractions = layout.map(\.fraction)
+        var changed = false
+        let status = rows.withUnsafeBufferPointer { rows in
+            fractions.withUnsafeBufferPointer {
+                pwm_engine_arrange(handle, rows.baseAddress, $0.baseAddress, $0.count, &changed)
+            }
+        }
+        if let error = EngineError(status) { throw error }
+        return changed
+    }
+
+    /// Brings every managed window fully on screen, for when tiling is turned off.
+    func release() throws {
+        if let error = EngineError(pwm_engine_release(handle)) { throw error }
+    }
+
     /// Advances strip slides by `seconds`. Returns whether one is still sliding.
     func tick(_ seconds: Double) throws -> Bool {
         var status = PWM_STATUS_OK
