@@ -162,7 +162,7 @@ struct MenuPanelView: View {
 
     private var widths: some View {
         VStack(alignment: .leading, spacing: 8) {
-            heading("Layout options")
+            PanelHeading(title: "Layout options")
             ForEach(model.presets, id: \.self) { fraction in
                 let selected = model.focusedFraction.map { abs($0 - fraction) < 0.02 } ?? false
                 Button { model.perform(.setWidth(fraction)) } label: {
@@ -191,7 +191,7 @@ struct MenuPanelView: View {
     private var layouts: some View {
         let windows = model.windows
         return VStack(alignment: .leading, spacing: 8) {
-            heading("Layouts")
+            PanelHeading(title: "Layouts")
             // Many windows scroll sideways rather than widen the panel.
             ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 8) {
                 ForEach(windows, id: \.self) { id in
@@ -226,7 +226,7 @@ struct MenuPanelView: View {
     private var controls: some View {
         VStack(spacing: 8) {
             // An invisible heading so the first button lines up with the other columns' first tiles.
-            heading(" ").hidden().accessibilityHidden(true)
+            PanelHeading(title: " ").hidden().accessibilityHidden(true)
             control("gearshape", "Settings…", .settings)
             control("arrow.clockwise", "Re-tile Now", .retile).disabled(!model.enabled)
             control("power", "Quit PaperWM", .quit)
@@ -249,13 +249,6 @@ struct MenuPanelView: View {
         .buttonStyle(.plain)
         .help(title)
         .accessibilityLabel(title)
-    }
-
-    private func heading(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.caption.weight(.semibold))
-            .kerning(0.8)
-            .foregroundStyle(Color.accentColor)
     }
 
     private static func percent(_ fraction: Double) -> String {
@@ -319,8 +312,21 @@ private struct AppIcon: View {
     }
 }
 
-private extension View {
-    /// The panel's rounded tile, tinted when it is the current choice.
+/// The panel's section title, also used by the Settings window.
+struct PanelHeading: View {
+    let title: String
+
+    var body: some View {
+        Text(title.uppercased())
+            .font(.caption.weight(.semibold))
+            .kerning(0.8)
+            .foregroundStyle(Color.accentColor)
+    }
+}
+
+extension View {
+    /// The panel's rounded tile, tinted when it is the current choice; the
+    /// Settings window uses it too.
     func tile(selected: Bool) -> some View {
         background(
             RoundedRectangle(cornerRadius: 8)
