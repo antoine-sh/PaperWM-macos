@@ -193,10 +193,10 @@ struct MenuPanelView: View {
         return VStack(alignment: .leading, spacing: 8) {
             heading("Layouts")
             // Many windows scroll sideways rather than widen the panel.
-            ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 6) {
+            ScrollView(.horizontal, showsIndicators: false) { HStack(spacing: 8) {
                 ForEach(windows, id: \.self) { id in
                     Button { model.perform(.focus(id)) } label: {
-                        AppIcon(pid: model.pid(of: id)).frame(width: 22, height: 22).padding(3)
+                        AppIcon(pid: model.pid(of: id)).frame(width: 22, height: 22).padding(4)
                             .tile(selected: id == model.focused)
                     }
                     .buttonStyle(.plain)
@@ -208,7 +208,7 @@ struct MenuPanelView: View {
                 ForEach(PanelLayout.suggestions(for: windows.count)) { layout in
                     Button { model.perform(.arrange(layout)) } label: {
                         Thumbnail(layout: layout, pids: windows.map(model.pid(of:)))
-                            .padding(5)
+                            .padding(4)
                             .frame(width: 78, height: 52)
                             .tile(selected: model.isCurrent(layout))
                     }
@@ -224,7 +224,7 @@ struct MenuPanelView: View {
     }
 
     private var controls: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             control("gearshape", "Settings…", .settings)
             control("arrow.clockwise", "Re-tile Now", .retile).disabled(!model.enabled)
             control("power", "Quit PaperWM", .quit)
