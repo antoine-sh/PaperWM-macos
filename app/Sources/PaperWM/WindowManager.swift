@@ -26,6 +26,10 @@ final class WindowManager {
     /// A sync asked for during a slide or a drag, run when it ends.
     private var syncDeferred = false
     private var hotKeysPaused = false
+    /// Off leaves every window where the user puts it; on tiles afresh.
+    private(set) var isEnabled = true
+    /// Called with each layout published, e.g. to keep the menu bar panel current.
+    var onPublish: ((EngineState) -> Void)?
     /// What was last applied, so settings edits only redo what changed.
     private var appliedConfig = ""
     private var appliedShortcuts: [KeyCombo] = []
@@ -106,14 +110,45 @@ final class WindowManager {
     /// Pauses global shortcuts, e.g. while one is being recorded.
     func setHotKeysPaused(_ paused: Bool) {
         hotKeysPaused = paused
-        if paused {
+        if paused || !isEnabled {
             hotKeys.unregisterAll()
         } else {
             hotKeys.register(settings.hotKeys)
         }
     }
 
+    /// Turns tiling off, bringing every window back on screen, or on again
+    /// from scratch, since windows were moved freely meanwhile.
+    func setEnabled(_ enabled: Bool) {
+        guard enabled != isEnabled else { return }
+        isEnabled = enabled
+        setHotKeysPaused(hotKeysPaused)
+        if enabled {
+            retile()
+            return
+        }
+        frames.stop()
+        syncDeferred = false
+        if switcher.isOpen { switcher.cancel() }
+        minimap.hide()
+        tabBars.hide()
+        decorations.hide()
+        report { try engine.release() }
+    }
+
+    /// Applies a layout from the menu bar panel to the active strip.
+    func arrange(_ layout: [(rows: Int, fraction: Double)]) {
+        guard isEnabled else { return }
+        report { try engine.arrange(layout) }
+        publish()
+    }
+
     func perform(_ action: Action) {
+        if case .toggle(let setting) = action {
+            settings.values[keyPath: setting].toggle()
+            return
+        }
+        guard isEnabled else { return }
         switch action {
         case .engine(PWM_COMMAND_TOGGLE_SCRATCH, _) where switcher.isOpen:
             // ⌃⌥Esc while switching cancels, as Esc does in PaperWM.
@@ -137,8 +172,8 @@ final class WindowManager {
             switcher.step(forward: forward, state: state)
             // A quick tap that is already over switches straight away.
             if !modifiers.superHeld { superReleased() }
-        case .toggle(let setting):
-            settings.values[keyPath: setting].toggle()
+        case .toggle:
+            break
         }
     }
 
@@ -159,17 +194,18 @@ final class WindowManager {
         let shortcuts = settings.hotKeys.map(\.combo)
         if shortcuts != appliedShortcuts {
             appliedShortcuts = shortcuts
-            if !hotKeysPaused { hotKeys.register(settings.hotKeys) }
+            if !hotKeysPaused && isEnabled { hotKeys.register(settings.hotKeys) }
             if let binding = settings.hotKeys.first(where: { $0.id == "switcher" }) {
                 modifiers.watch(carbonModifiers: binding.combo.modifiers)
                 gestures.watch(carbonModifiers: binding.combo.modifiers)
             }
         }
-        decorations.apply(settings.values)
+        if isEnabled { decorations.apply(settings.values) }
     }
 
     @discardableResult
     private func publish() -> EngineState? {
+        guard isEnabled else { return nil }
         animate()
         settle()
         recheck()
@@ -179,6 +215,7 @@ final class WindowManager {
         }
         decorations.refresh(focus: state.focusedWindow)
         tabBars.update(state)
+        onPublish?(state)
         return state
     }
 
@@ -240,7 +277,7 @@ final class WindowManager {
     /// Syncs shortly, coalescing bursts of notifications: one focus change
     /// sends several, a few milliseconds apart.
     func scheduleSync() {
-        guard !syncScheduled else { return }
+        guard isEnabled, !syncScheduled else { return }
         syncScheduled = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
             MainActor.assumeIsolated {
@@ -258,6 +295,7 @@ final class WindowManager {
     }
 
     func syncNow() {
+        guard isEnabled else { return }
         report { try engine.sync() }
         publish()
     }
@@ -265,6 +303,7 @@ final class WindowManager {
     /// Moves a window dragged onto another column there; the drop syncs in
     /// place of any sync held back during the drag.
     private func dropped(at point: CGPoint) {
+        guard isEnabled else { return }
         syncDeferred = false
         report { try engine.drop(at: point) }
         publish()
@@ -283,6 +322,7 @@ final class WindowManager {
     }
 
     private func updateMonitors() {
+        guard isEnabled else { return }
         report {
             try engine.setMonitors(NSScreen.screens)
             try engine.sync()

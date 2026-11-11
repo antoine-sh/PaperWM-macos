@@ -60,6 +60,10 @@ final class TabBars {
         }
     }
 
+    func hide() {
+        panels.forEach { $0.orderOut(nil) }
+    }
+
     private static func panel(focus: @escaping (UInt32) -> Void) -> TabPanel {
         let panel = TabPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered,
                              defer: true)

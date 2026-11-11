@@ -91,7 +91,7 @@ final class Decorations {
         if window?.frame != focused?.frame { show(window, raised: false) }
     }
 
-    private func hide() {
+    func hide() {
         focused = nil
         border.orderOut(nil)
         dims.forEach { $0.orderOut(nil) }

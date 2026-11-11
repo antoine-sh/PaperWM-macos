@@ -153,6 +153,8 @@ pub enum Command {
     EqualHeights,
     /// Moves keyboard focus to the next display, wrapping around.
     FocusNextMonitor,
+    /// Sets the focused column to this fraction of the screen, in (0, 1].
+    SetWidth(f64),
 }
 
 impl Command {
@@ -194,6 +196,7 @@ impl Command {
             38 => EqualHeights,
             39 => FocusNextMonitor,
             40 => Unstack,
+            41 if arg > 0.0 && arg <= 1.0 => SetWidth(arg),
             _ => return None,
         })
     }
@@ -840,6 +843,7 @@ impl Engine {
             Command::Taller => ws.resize_row(self.config.height_step, column_height, gap),
             Command::Shorter => ws.resize_row(-self.config.height_step, column_height, gap),
             Command::EqualHeights => ws.equalize_rows(),
+            Command::SetWidth(fraction) => ws.set_width(fraction, viewport, gap),
         };
         if !matches!(command, Command::Center | Command::ScrollBy(_)) {
             self.ensure_visible_all();
@@ -869,6 +873,55 @@ impl Engine {
             }
         }
         Ok(changed)
+    }
+
+    /// Regroups the active strip's windows into columns of `rows` windows at
+    /// `fraction` of the screen each; see [`Workspace::arrange`].
+    pub fn arrange(&mut self, layout: &[(usize, f64)]) -> Result<bool> {
+        if self.monitors.is_empty() {
+            return Ok(false);
+        }
+        let viewport = self.viewport(self.active);
+        let ws = &mut self.workspaces[self.monitors[self.active].workspace];
+        let changed = ws.arrange(layout, viewport, self.config.gap);
+        self.ensure_visible_all();
+        self.apply()?;
+        Ok(changed)
+    }
+
+    /// Brings every managed window fully into the usable area of the monitor
+    /// showing its strip, or the active one, for when tiling is turned off:
+    /// windows parked off screen or scrolled out of view would otherwise be
+    /// out of reach. Sizes are kept where they fit.
+    pub fn release(&self) -> Result<()> {
+        let Some(active) = self.monitors.get(self.active).map(|m| m.area) else { return Ok(()) };
+        let area_of = |id: WindowId| -> Option<Rect> {
+            if self.scratch.iter().any(|&(w, _)| w == id) {
+                return Some(active);
+            }
+            let index = self.workspaces.iter().position(|w| w.contains(id))?;
+            Some(self.monitors.iter().find(|m| m.workspace == index).map_or(active, |m| m.area))
+        };
+        for w in self.backend.windows()? {
+            let Some(area) = area_of(w.id).filter(|_| !w.is_fullscreen && !w.is_minimized) else { continue };
+            let (width, height) = (w.frame.width.min(area.width), w.frame.height.min(area.height));
+            let x = w.frame.x.clamp(area.x, area.max_x() - width);
+            let y = w.frame.y.clamp(area.y, area.max_y() - height);
+            let frame = Rect::new(x, y, width, height);
+            if frame == w.frame {
+                continue;
+            }
+            let result = if w.is_resizable && frame.size() != w.frame.size() {
+                self.backend.set_frame(w.id, frame)
+            } else {
+                self.backend.set_position(w.id, x, y)
+            };
+            match result {
+                Ok(()) | Err(BackendError::WindowNotFound(_)) => {}
+                Err(err) => return Err(err),
+            }
+        }
+        Ok(())
     }
 
     /// See [`WindowBackend::note_transition`].
@@ -2158,6 +2211,9 @@ mod tests {
         assert_eq!(Command::parse(0, 0.0), Some(Command::FocusLeft));
         assert_eq!(Command::parse(12, 0.0), Some(Command::Expel));
         assert_eq!(Command::parse(38, 0.0), Some(Command::EqualHeights));
+        assert_eq!(Command::parse(41, 0.5), Some(Command::SetWidth(0.5)));
+        assert_eq!(Command::parse(41, 0.0), None);
+        assert_eq!(Command::parse(41, 1.5), None);
         assert_eq!(Command::parse(39, 0.0), Some(Command::FocusNextMonitor));
         assert_eq!(Command::parse(13, 0.0), None, "workspaces are gone");
         assert_eq!(Command::parse(u32::MAX, 0.0), None);
@@ -2682,6 +2738,30 @@ mod tests {
         engine.command(Command::FocusLeft).unwrap();
         let focused = engine.focused_window().unwrap();
         assert_eq!(middle(focused), Some(screen_middle));
+    }
+
+    #[test]
+    fn arrange_stacks_the_active_strip_and_moves_the_windows() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 300.0), window(3, 800.0, 300.0)]);
+        engine.sync().unwrap();
+        assert_eq!(engine.arrange(&[(1, 0.5), (2, 0.5)]), Ok(true));
+        assert_eq!(columns(&engine), vec![vec![1], vec![2, 3]]);
+        assert_eq!(backend.frame_of(2).unwrap().x, backend.frame_of(3).unwrap().x);
+        assert_eq!(backend.frame_of(1).unwrap().width, 0.5 * (1000.0 + 8.0) - 8.0);
+    }
+
+    #[test]
+    fn release_brings_parked_windows_back_on_screen() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 600.0), window(2, 700.0, 600.0)]);
+        engine.sync().unwrap();
+        let inside = |r: Rect| r.x >= SCREEN.x && r.max_x() <= SCREEN.max_x();
+        let frames = || [1, 2].map(|id| backend.frame_of(id).unwrap());
+        // Two 600pt columns cannot both fit: one is scrolled partly out of view.
+        assert!(!frames().into_iter().all(inside));
+        engine.release().unwrap();
+        assert!(frames().into_iter().all(inside));
+        assert!(frames().into_iter().all(|r| r.width == 600.0));
     }
 
     #[test]

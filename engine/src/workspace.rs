@@ -414,6 +414,43 @@ impl Workspace {
         true
     }
 
+    /// Sets the focused column to `fraction` of the screen, sized as a width preset is.
+    pub fn set_width(&mut self, fraction: f64, viewport: f64, gap: f64) -> bool {
+        let Some(column) = self.columns.get_mut(self.focused) else { return false };
+        let width = clamp_width(fraction * (viewport + gap) - gap, viewport);
+        let changed = width != column.width || column.width_before_full.is_some();
+        column.width = width;
+        column.width_before_full = None;
+        changed
+    }
+
+    /// Regroups the unpinned windows, in strip order, into columns of `rows`
+    /// windows at `fraction` of the screen each, keeping focus on the same
+    /// window. Windows past the layout keep a column each at their width;
+    /// pinned columns stay as they are. Stacks lose their tabs and heights.
+    pub fn arrange(&mut self, layout: &[(usize, f64)], viewport: f64, gap: f64) -> bool {
+        let focused = self.focused_window();
+        let before = self.columns.clone();
+        let (mut columns, free): (Vec<Column>, Vec<Column>) =
+            std::mem::take(&mut self.columns).into_iter().partition(|c| c.pinned.is_some());
+        let mut windows = free.iter().flat_map(|c| c.windows.iter().map(move |&w| (w, c.width)));
+        for &(rows, fraction) in layout {
+            let ids: Vec<WindowId> = windows.by_ref().take(rows).map(|(w, _)| w).collect();
+            let Some(&first) = ids.first() else { break };
+            let mut column = Column::new(first, clamp_width(fraction * (viewport + gap) - gap, viewport));
+            column.windows = ids;
+            columns.push(column);
+        }
+        columns.extend(windows.map(|(w, width)| Column::new(w, width)));
+        self.columns = columns;
+        self.focused = 0;
+        if let Some(id) = focused {
+            self.focus_window(id);
+        }
+        self.keep_pins_at_edges();
+        self.columns != before
+    }
+
     /// Grows (or, with a negative `delta`, shrinks) the focused column by
     /// `delta` points, between the minimum width and the viewport.
     pub fn nudge_width(&mut self, delta: f64, viewport: f64) -> bool {
@@ -902,6 +939,41 @@ mod tests {
         ws.focus_column(-1);
         ws.cycle_width(&[0.5], VIEW, GAP);
         assert_eq!(ws.strip_width(GAP), VIEW);
+    }
+
+    #[test]
+    fn set_width_sizes_the_focused_column_like_a_preset() {
+        let mut ws = workspace(&[300.0, 300.0]);
+        assert!(ws.set_width(0.5, VIEW, GAP));
+        assert_eq!(ws.columns()[1].width(), 0.5 * (VIEW + GAP) - GAP);
+        assert!(!ws.set_width(0.5, VIEW, GAP));
+        assert!(ws.set_width(1.0, VIEW, GAP));
+        assert_eq!(ws.columns()[1].width(), VIEW);
+        assert_eq!(ws.columns()[0].width(), 300.0);
+    }
+
+    #[test]
+    fn arrange_regroups_windows_in_strip_order_and_keeps_focus() {
+        let mut ws = workspace(&[300.0, 300.0, 300.0, 300.0, 200.0]);
+        ws.focus_window(3);
+        assert!(ws.arrange(&[(1, 0.5), (2, 0.5)], VIEW, GAP));
+        assert_eq!(layout(&ws), vec![vec![1], vec![2, 3], vec![4], vec![5]]);
+        assert_eq!(ws.columns()[1].width(), 0.5 * (VIEW + GAP) - GAP);
+        assert_eq!(ws.columns()[3].width(), 200.0);
+        assert_eq!(ws.focused_window(), Some(3));
+        assert!(!ws.arrange(&[(1, 0.5), (2, 0.5)], VIEW, GAP));
+        assert!(ws.arrange(&[(5, 1.0)], VIEW, GAP));
+        assert_eq!(layout(&ws), vec![vec![1, 2, 3, 4, 5]]);
+    }
+
+    #[test]
+    fn arrange_leaves_pins_alone() {
+        let mut ws = workspace(&[300.0, 300.0, 300.0]);
+        ws.toggle_pin(Pin::Right, VIEW, GAP);
+        assert!(ws.arrange(&[(2, 0.5)], VIEW, GAP));
+        assert_eq!(layout(&ws), vec![vec![1, 2], vec![3]]);
+        assert_eq!(pins(&ws), vec![None, Some(Pin::Right)]);
+        assert_eq!(ws.focused_window(), Some(3));
     }
 
     #[test]
