@@ -15,6 +15,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSPopo
     /// Closes the panel on a click in another app, which a transient popover
     /// of an app that is not active does not always notice.
     private var outsideClicks: Any?
+    /// A click on the icon can close the panel on mouse-down before its action runs on mouse-up.
+    private var popoverClosed = Date.distantPast
     private var trustTimer: Timer?
     private let settingsWindow = SettingsWindowController()
     private let onboarding = OnboardingWindowController()
@@ -80,6 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSPopo
             popover.performClose(nil)
             return
         }
+        // That same click closed it a moment ago; leave it closed.
+        guard Date().timeIntervalSince(popoverClosed) > 0.3 else { return }
         refreshPanel(manager.engine.state())
         manager.onPublish = { [weak self] state in self?.refreshPanel(state) }
         popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
@@ -102,6 +106,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSPopo
         outsideClicks = nil
         manager?.onPublish = nil
         panel.hovered = nil
+        popoverClosed = Date()
     }
 
     private func panelAction(_ action: PanelAction) {
@@ -145,7 +150,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSPopo
             dim.state = manager.settings.values.dimBackground ? .on : .off
             menu.addItem(dim)
             menu.addItem(.separator())
-            menu.addItem(action("Re-tile Now", #selector(retile)))
+            let tiling = action("Tiling", #selector(toggleTiling))
+            tiling.state = manager.isEnabled ? .on : .off
+            menu.addItem(tiling)
+            if manager.isEnabled { menu.addItem(action("Re-tile Now", #selector(retile))) }
             let shortcuts = NSMenuItem(title: "Keyboard Shortcuts", action: nil, keyEquivalent: "")
             let submenu = NSMenu()
             for hotKey in manager.hotKeys.hotKeys {
@@ -177,6 +185,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSPopo
         settingsWindow.show(settings: manager.settings, failed: manager.hotKeys.failed) { [weak manager] recording in
             manager?.setHotKeysPaused(recording)
         }
+    }
+
+    @objc private func toggleTiling() {
+        guard let manager else { return }
+        manager.setEnabled(!manager.isEnabled)
     }
 
     @objc private func retile() {

@@ -124,9 +124,13 @@ final class WindowManager {
         isEnabled = enabled
         setHotKeysPaused(hotKeysPaused)
         if enabled {
+            // Watch the switcher's modifiers again; `retile` reapplies the rest.
+            appliedShortcuts = []
             retile()
             return
         }
+        // Lets ⌃⌥-scrolling through to apps.
+        gestures.watch(carbonModifiers: 0)
         frames.stop()
         syncDeferred = false
         if switcher.isOpen { switcher.cancel() }
@@ -185,6 +189,8 @@ final class WindowManager {
     }
 
     private func applySettings() {
+        // Changing the gap or app rules would tile again; turning tiling on applies everything afresh.
+        guard isEnabled else { return }
         let config = settings.engineConfigJSON
         if config != appliedConfig {
             appliedConfig = config
@@ -194,13 +200,13 @@ final class WindowManager {
         let shortcuts = settings.hotKeys.map(\.combo)
         if shortcuts != appliedShortcuts {
             appliedShortcuts = shortcuts
-            if !hotKeysPaused && isEnabled { hotKeys.register(settings.hotKeys) }
+            if !hotKeysPaused { hotKeys.register(settings.hotKeys) }
             if let binding = settings.hotKeys.first(where: { $0.id == "switcher" }) {
                 modifiers.watch(carbonModifiers: binding.combo.modifiers)
                 gestures.watch(carbonModifiers: binding.combo.modifiers)
             }
         }
-        if isEnabled { decorations.apply(settings.values) }
+        decorations.apply(settings.values)
     }
 
     @discardableResult

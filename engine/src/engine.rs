@@ -905,8 +905,9 @@ impl Engine {
         for w in self.backend.windows()? {
             let Some(area) = area_of(w.id).filter(|_| !w.is_fullscreen && !w.is_minimized) else { continue };
             let (width, height) = (w.frame.width.min(area.width), w.frame.height.min(area.height));
-            let x = w.frame.x.clamp(area.x, area.max_x() - width);
-            let y = w.frame.y.clamp(area.y, area.max_y() - height);
+            // Not `clamp`, which panics when rounding puts the bounds the wrong way round.
+            let x = w.frame.x.min(area.max_x() - width).max(area.x);
+            let y = w.frame.y.min(area.max_y() - height).max(area.y);
             let frame = Rect::new(x, y, width, height);
             if frame == w.frame {
                 continue;
@@ -916,9 +917,9 @@ impl Engine {
             } else {
                 self.backend.set_position(w.id, x, y)
             };
-            match result {
-                Ok(()) | Err(BackendError::WindowNotFound(_)) => {}
-                Err(err) => return Err(err),
+            // One hung app must not leave the windows after it out of reach.
+            if let Err(BackendError::NotTrusted) = result {
+                return Err(BackendError::NotTrusted);
             }
         }
         Ok(())
@@ -2762,6 +2763,20 @@ mod tests {
         engine.release().unwrap();
         assert!(frames().into_iter().all(inside));
         assert!(frames().into_iter().all(|r| r.width == 600.0));
+    }
+
+    #[test]
+    fn release_goes_on_past_a_window_that_refuses_to_move() {
+        let (mut engine, backend) =
+            engine_with(vec![window(1, 0.0, 600.0), window(2, 700.0, 600.0), window(3, 1400.0, 600.0)]);
+        engine.sync().unwrap();
+        let inside = |r: Rect| r.x >= SCREEN.x && r.max_x() <= SCREEN.max_x();
+        let outside: Vec<WindowId> =
+            [1, 2, 3].into_iter().filter(|&id| !inside(backend.frame_of(id).unwrap())).collect();
+        assert!(outside.len() >= 2);
+        backend.set_refusing(vec![outside[0]]);
+        assert_eq!(engine.release(), Ok(()));
+        assert!(outside[1..].iter().all(|&id| inside(backend.frame_of(id).unwrap())));
     }
 
     #[test]

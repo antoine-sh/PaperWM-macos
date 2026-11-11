@@ -96,7 +96,13 @@ final class PanelModel: ObservableObject {
 
     var windows: [UInt32] { columns.flatMap(\.windows) }
 
-    var focused: UInt32? { state?.focusedWindow }
+    /// The active strip's focused window, which the width buttons resize; macOS
+    /// focus can be on a floating window or another display.
+    var focused: UInt32? {
+        guard let workspace, workspace.columns.indices.contains(workspace.focusedColumn) else { return nil }
+        let column = workspace.columns[workspace.focusedColumn]
+        return column.windows.indices.contains(column.focusedRow) ? column.windows[column.focusedRow] : nil
+    }
 
     func pid(of id: UInt32) -> Int32? { state?.window(id)?.pid }
 
