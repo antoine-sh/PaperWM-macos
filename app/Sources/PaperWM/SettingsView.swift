@@ -58,25 +58,38 @@ struct SettingsView: View {
     /// The tabs as the menu bar panel's tiles.
     private var tabBar: some View {
         HStack(spacing: 8) {
-            ForEach(Tab.allCases, id: \.self) { item in
-                Button { tab = item } label: {
+            ForEach(Array(Tab.allCases.enumerated()), id: \.element) { index, item in
+                Button { select(item) } label: {
                     VStack(spacing: 4) {
                         Image(systemName: item.symbol)
                             .font(.system(size: 16))
                             .frame(height: 20)
-                            .foregroundStyle(tab == item ? Color.accentColor : Color.primary)
                         Text(item.rawValue).font(.caption)
                     }
+                    .foregroundStyle(tab == item ? Color.accentColor : Color.primary)
                     .padding(4)
                     .frame(width: 92, height: 52)
                     .tile(selected: tab == item)
                 }
                 .buttonStyle(.plain)
+                // Plain buttons take no keyboard focus by default.
+                .keyboardShortcut(KeyEquivalent(Character("\(index + 1)")), modifiers: .command)
+                .accessibilityLabel(item.rawValue)
                 .accessibilityAddTraits(tab == item ? .isSelected : [])
             }
         }
         .frame(maxWidth: .infinity)
         .padding(16)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Settings sections")
+    }
+
+    /// Leaving a tab removes its views before focus moves, so commit the
+    /// presets field and end a recording that would go on unseen.
+    private func select(_ item: Tab) {
+        if tab == .layout { commitPresets() }
+        recorder.stop()
+        tab = item
     }
 
     /// A section footer in the panel's footer style.
@@ -348,6 +361,8 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
             .help(recording ? "Press the new shortcut, or Esc to cancel" : "Click to record a new shortcut")
+            .accessibilityLabel("\(hotKey.title) shortcut")
+            .accessibilityValue(recording ? "Recording" : combo.wrappedValue.symbol)
             Button { settings.values.shortcuts[hotKey.id] = nil } label: {
                 Image(systemName: "arrow.uturn.backward")
             }
