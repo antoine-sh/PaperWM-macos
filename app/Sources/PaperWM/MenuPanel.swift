@@ -325,6 +325,9 @@ struct PanelHeading: View {
             .font(.caption.weight(.semibold))
             .kerning(0.8)
             .foregroundStyle(Color.accentColor)
+            // One line, widening its column if need be: "Layout options" is wider than the width buttons.
+            .lineLimit(1)
+            .fixedSize()
     }
 }
 
