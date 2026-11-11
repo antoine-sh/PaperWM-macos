@@ -219,7 +219,8 @@ final class WindowManager {
             decorations.refresh(focus: nil)
             return nil
         }
-        decorations.refresh(focus: state.focusedWindow, placed: engine.placedFrame)
+        // A dragged window is under the pointer, not where the engine put it.
+        decorations.refresh(focus: state.focusedWindow) { drags.isDragging ? nil : engine.placedFrame($0) }
         tabBars.update(state)
         onPublish?(state)
         return state

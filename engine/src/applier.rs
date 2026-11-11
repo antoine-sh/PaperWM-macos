@@ -23,11 +23,13 @@ impl FrameApplier {
     }
 
     /// Where `id` should be now: the frame last set on it, or where it went
-    /// instead if it refuses that frame.
+    /// instead if it refuses that size, moved along with it since.
     pub fn placed(&self, id: WindowId) -> Option<Rect> {
         let applied = self.get(id)?;
         match self.refused.get(&id) {
-            Some(&(given, went)) if within(given, applied, SAME) => Some(went),
+            Some(&(given, went)) if within(given, Rect { x: given.x, y: given.y, ..applied }, SAME) => {
+                Some(Rect { x: went.x + applied.x - given.x, y: went.y + applied.y - given.y, ..went })
+            }
             _ => Some(applied),
         }
     }

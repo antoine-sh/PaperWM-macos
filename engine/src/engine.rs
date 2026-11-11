@@ -2600,6 +2600,28 @@ mod tests {
     }
 
     #[test]
+    fn placed_frame_keeps_a_refused_size_through_a_slide() {
+        let (mut engine, backend) = engine_with(vec![window(1, 0.0, 300.0), window(2, 400.0, 900.0)]);
+        engine.set_config(Config { animation_duration: 0.2, ..Config::default() }).unwrap();
+        // Windows are only observed once the strip stops sliding.
+        let sync = |engine: &mut Engine| {
+            engine.sync().unwrap();
+            engine.tick(1.0).unwrap();
+        };
+        sync(&mut engine);
+        let refused = Rect { width: 500.0, ..backend.frame_of(1).unwrap() };
+        backend.update(1, |w| w.frame = refused);
+        sync(&mut engine);
+        backend.update(1, |w| w.frame = refused);
+        sync(&mut engine);
+        engine.command(Command::FocusLeft).unwrap();
+        engine.tick(0.05).unwrap();
+        assert!(engine.is_animating());
+        assert_ne!(backend.frame_of(1).unwrap().x, refused.x);
+        assert_eq!(engine.placed_frame(1), backend.frame_of(1));
+    }
+
+    #[test]
     fn layout_changes_are_logged_with_their_reason() {
         let (mut engine, backend) =
             engine_with(vec![window(1, 0.0, 300.0), window(2, 100.0, 300.0), window(3, 200.0, 300.0)]);
