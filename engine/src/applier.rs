@@ -22,6 +22,16 @@ impl FrameApplier {
         self.applied.get(&id).copied()
     }
 
+    /// Where `id` should be now: the frame last set on it, or where it went
+    /// instead if it refuses that frame.
+    pub fn placed(&self, id: WindowId) -> Option<Rect> {
+        let applied = self.get(id)?;
+        match self.refused.get(&id) {
+            Some(&(given, went)) if within(given, applied, SAME) => Some(went),
+            _ => Some(applied),
+        }
+    }
+
     /// Forgets a window that no longer exists.
     pub fn forget(&mut self, id: WindowId) {
         self.applied.remove(&id);

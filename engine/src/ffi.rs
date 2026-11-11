@@ -343,6 +343,20 @@ pub unsafe extern "C" fn pwm_engine_is_animating(engine: *const Engine) -> bool 
     engine.as_ref().is_some_and(Engine::is_animating)
 }
 
+/// Writes where the engine last put managed window `id` into `out`; false if
+/// it put it nowhere (unmanaged, fullscreen) or `out` is null.
+///
+/// # Safety
+/// `engine` must be a live pointer from `pwm_engine_new`, or null.
+/// `out` must be valid for writes, or null.
+#[no_mangle]
+pub unsafe extern "C" fn pwm_engine_placed_frame(engine: *const Engine, id: u32, out: *mut Rect) -> bool {
+    let (Some(engine), Some(out)) = (engine.as_ref(), out.as_mut()) else { return false };
+    let Some(frame) = engine.placed_frame(id) else { return false };
+    *out = frame;
+    true
+}
+
 /// Whether the last sync met a window still being created, so
 /// `pwm_engine_sync` should be called again shortly.
 ///

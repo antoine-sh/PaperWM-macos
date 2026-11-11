@@ -161,7 +161,7 @@ final class WindowManager {
             // Pans arrive every frame: move the windows and the decorations,
             // and leave the full update to the end of the pan.
             report { try engine.run(PWM_COMMAND_SCROLL_BY, arg: arg) }
-            decorations.track()
+            decorations.track(placed: engine.placedFrame)
         case .engine(let command, let arg):
             var changed = false
             report { changed = try engine.run(command, arg: arg) }
@@ -219,7 +219,7 @@ final class WindowManager {
             decorations.refresh(focus: nil)
             return nil
         }
-        decorations.refresh(focus: state.focusedWindow)
+        decorations.refresh(focus: state.focusedWindow, placed: engine.placedFrame)
         tabBars.update(state)
         onPublish?(state)
         return state
@@ -271,7 +271,7 @@ final class WindowManager {
         var sliding = false
         report { sliding = try engine.tick(now - lastTick) }
         lastTick = now
-        decorations.track()
+        decorations.track(placed: engine.placedFrame)
         guard !sliding else { return }
         frames.stop()
         if syncDeferred && !drags.isDragging {

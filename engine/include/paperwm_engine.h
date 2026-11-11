@@ -139,6 +139,10 @@ bool pwm_engine_tick(PwmEngine *engine, double seconds, PwmStatus *status);
 // Whether a strip is sliding, so pwm_engine_tick should run every frame.
 bool pwm_engine_is_animating(const PwmEngine *engine);
 
+// Writes where the engine last put managed window `id` into `out`; false if it
+// put it nowhere (unmanaged, fullscreen). The window server lags behind this.
+bool pwm_engine_placed_frame(const PwmEngine *engine, uint32_t id, PwmRect *out);
+
 // Whether the last sync met a window still being created, so pwm_engine_sync
 // should be called again shortly.
 bool pwm_engine_is_settling(const PwmEngine *engine);
