@@ -157,7 +157,8 @@ struct MenuPanelView: View {
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
         }
-        .frame(width: 560)
+        // 110 widths + 4 × 78 layouts with 3 × 8 gaps + 32 controls + 4 × 16 spacing + 2 dividers + 2 × 16 padding.
+        .frame(width: 576)
     }
 
     private var widths: some View {
