@@ -203,11 +203,8 @@ impl WindowBackend for AxBackend {
         }
 
         let present_apps: BTreeSet<i32> = apps.keys().copied().collect();
-        // The user drags windows of the front app without it notifying, so
-        // it is always read.
-        // shortcut: other apps' titles go stale until they notify; observe
-        // title changes if the switcher shows outdated titles.
-        let front = on_screen.values().filter(|w| w.pid != own_pid).min_by_key(|w| w.z_order).map(|w| w.pid);
+        // shortcut: titles go stale until their app's windows change or it
+        // notifies; observe title changes if the switcher shows outdated titles.
         let everything = self.handler.everything.replace(false);
         let changed = std::mem::take(&mut *self.handler.changed.borrow_mut());
         let mut transition = self.transition.replace(false);
@@ -227,9 +224,10 @@ impl WindowBackend for AxBackend {
                 seen.remove(&pid);
                 continue;
             }
-            // Opening, closing, hiding, minimizing or moving a window to
-            // another Space changes the app's on-screen set or notifies.
-            if !everything && Some(pid) != front && !changed.contains(&pid) && seen.get(&pid) == Some(&ids) {
+            // Opening, closing, hiding, minimizing, moving or resizing a
+            // window, or sending it to another Space, changes the app's
+            // on-screen set or notifies.
+            if !everything && !changed.contains(&pid) && seen.get(&pid) == Some(&ids) {
                 continue;
             }
             seen.remove(&pid);

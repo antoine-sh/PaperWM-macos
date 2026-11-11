@@ -109,6 +109,15 @@ final class Decorations {
     /// drag. `placed` gives where the engine just put a window, if it did.
     func track(placed: @MainActor (CGWindowID) -> CGRect? = { _ in nil }) {
         guard isActive, let id = focused?.id else { return }
+        // Slides and pans track every display frame. The window server was
+        // asked about this window when it was decorated, and is again by the
+        // check after the engine stops moving it.
+        if let frame = placed(id) {
+            placedAt = CACurrentMediaTime()
+            scheduleCheck()
+            if frame != focused?.frame { show((id: id, frame: frame), raised: false) }
+            return
+        }
         let window = locate(id, placed: placed)
         if window?.frame != focused?.frame { show(window, raised: false) }
     }

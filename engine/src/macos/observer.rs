@@ -9,8 +9,8 @@ use accessibility_sys::{
     kAXApplicationHiddenNotification, kAXApplicationShownNotification, kAXErrorSuccess,
     kAXFocusedWindowChangedNotification, kAXMainWindowChangedNotification, kAXUIElementDestroyedNotification,
     kAXWindowCreatedNotification, kAXWindowDeminiaturizedNotification, kAXWindowMiniaturizedNotification,
-    AXObserverAddNotification, AXObserverCreate, AXObserverGetRunLoopSource, AXObserverRef, AXUIElementGetPid,
-    AXUIElementRef,
+    kAXWindowMovedNotification, kAXWindowResizedNotification, AXObserverAddNotification, AXObserverCreate,
+    AXObserverGetRunLoopSource, AXObserverRef, AXUIElementGetPid, AXUIElementRef,
 };
 use core_foundation::base::TCFType;
 use core_foundation::string::CFString;
@@ -50,8 +50,36 @@ const APP_NOTIFICATIONS: [&str; 7] = [
     kAXApplicationShownNotification,
 ];
 
-/// Watches one app. Window destruction is only reported to observers of the
-/// window itself, so each window is registered as it is discovered.
+/// Registered on each window: destruction is only reported to observers of
+/// the window itself, and so are moves and resizes.
+const WINDOW_NOTIFICATIONS: [&str; 3] =
+    [kAXUIElementDestroyedNotification, kAXWindowMovedNotification, kAXWindowResizedNotification];
+
+/// What a notification asks of the engine.
+#[derive(Debug, PartialEq, Eq)]
+enum Effect {
+    /// Read the app's windows on the next sync, and sync soon.
+    ReadAndSync,
+    /// Read the app's windows on the next sync, without asking for one: the
+    /// engine's own writes move windows every frame of a slide or pan, and a
+    /// window the user drags is synced when it is dropped.
+    Read,
+    /// Sync soon without reading the app's windows: focus moved between
+    /// windows it already listed, which the sync asks for anyway.
+    Sync,
+}
+
+// The AX notification names are lower-case Apple names.
+#[allow(non_upper_case_globals)]
+fn effect(notification: &str) -> Effect {
+    match notification {
+        kAXWindowMovedNotification | kAXWindowResizedNotification => Effect::Read,
+        kAXFocusedWindowChangedNotification | kAXMainWindowChangedNotification => Effect::Sync,
+        _ => Effect::ReadAndSync,
+    }
+}
+
+/// Watches one app, and each of its windows as it is discovered.
 pub struct AppObserver {
     observer: AXObserverRef,
     context: *const HandlerSlot,
@@ -80,7 +108,9 @@ impl AppObserver {
 
     pub fn watch_window(&mut self, id: WindowId, window: &AxElement) {
         if self.windows.insert(id) {
-            let _ = self.add(window.as_raw(), kAXUIElementDestroyedNotification);
+            for notification in WINDOW_NOTIFICATIONS {
+                let _ = self.add(window.as_raw(), notification);
+            }
         }
     }
 
@@ -110,15 +140,21 @@ impl Drop for AppObserver {
 unsafe extern "C" fn on_notification(
     _observer: AXObserverRef,
     element: AXUIElementRef,
-    _notification: CFStringRef,
+    notification: CFStringRef,
     context: *mut c_void,
 ) {
     let slot = &*(context as *const HandlerSlot);
-    let mut pid = 0;
-    if AXUIElementGetPid(element, &mut pid) == kAXErrorSuccess {
-        slot.mark(pid);
-    } else {
-        slot.everything.set(true);
+    let effect = effect(&CFString::wrap_under_get_rule(notification).to_string());
+    if effect != Effect::Sync {
+        let mut pid = 0;
+        if AXUIElementGetPid(element, &mut pid) == kAXErrorSuccess {
+            slot.mark(pid);
+        } else {
+            slot.everything.set(true);
+        }
+    }
+    if effect == Effect::Read {
+        return;
     }
     // A busy slot means the handler is being replaced; dropping one
     // notification is harmless since the replacement triggers a sync.
@@ -126,5 +162,20 @@ unsafe extern "C" fn on_notification(
         if let Some(handler) = handler.as_ref() {
             handler();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn moves_are_read_lazily_and_focus_changes_read_nothing() {
+        assert_eq!(effect(kAXWindowMovedNotification), Effect::Read);
+        assert_eq!(effect(kAXWindowResizedNotification), Effect::Read);
+        assert_eq!(effect(kAXFocusedWindowChangedNotification), Effect::Sync);
+        assert_eq!(effect(kAXMainWindowChangedNotification), Effect::Sync);
+        assert_eq!(effect(kAXWindowCreatedNotification), Effect::ReadAndSync);
+        assert_eq!(effect(kAXUIElementDestroyedNotification), Effect::ReadAndSync);
     }
 }
