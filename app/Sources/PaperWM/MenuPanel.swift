@@ -150,14 +150,17 @@ struct MenuPanelView: View {
             }
             .padding(16)
             Divider()
+            // An ideal width of 0 keeps a long footer from widening the panel; it truncates instead.
             Text(model.footer)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
+                .frame(minWidth: 0, idealWidth: 0, maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 16)
                 .padding(.vertical, 10)
         }
-        .frame(width: 560)
+        // Sized to the columns, so the side padding is never squeezed.
+        .fixedSize()
     }
 
     private var widths: some View {
@@ -203,7 +206,7 @@ struct MenuPanelView: View {
                     .help(model.state?.window(id).map { $0.title.isEmpty ? $0.appName : $0.title } ?? "")
                 }
             } }
-            .frame(height: 30, alignment: .leading)
+            .frame(width: 4 * 78 + 3 * 8, height: 30, alignment: .leading)
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(78), spacing: 8), count: 4), spacing: 8) {
                 ForEach(PanelLayout.suggestions(for: windows.count)) { layout in
                     Button { model.perform(.arrange(layout)) } label: {
@@ -321,6 +324,9 @@ struct PanelHeading: View {
             .font(.caption.weight(.semibold))
             .kerning(0.8)
             .foregroundStyle(Color.accentColor)
+            // One line, widening its column if need be: "Layout options" is wider than the width buttons.
+            .lineLimit(1)
+            .fixedSize()
     }
 }
 
