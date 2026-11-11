@@ -129,8 +129,9 @@ final class PanelModel: ObservableObject {
     }
 
     var footer: String {
-        if !enabled { return "Tiling is off: windows stay where you put them." }
+        // Hover first: the controls column still works, and names its buttons, while tiling is off.
         if let hovered { return hovered }
+        if !enabled { return "Tiling is off: windows stay where you put them." }
         let n = windows.count
         return n == 0 ? "No windows to arrange on this screen." : "Pick a layout for the \(n) windows on this screen."
     }
@@ -239,6 +240,7 @@ struct MenuPanelView: View {
                 .toggleStyle(.switch)
                 .labelsHidden()
                 .help(model.enabled ? "Turn tiling off" : "Turn tiling on")
+                .onHover { model.hovered = $0 ? "Turn tiling on or off" : nil }
         }
     }
 
@@ -251,6 +253,7 @@ struct MenuPanelView: View {
         }
         .buttonStyle(.plain)
         .help(title)
+        .onHover { model.hovered = $0 ? title : nil }
         .accessibilityLabel(title)
     }
 
