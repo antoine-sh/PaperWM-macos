@@ -39,7 +39,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSPopo
         statusItem = item
         popover.behavior = .transient
         popover.delegate = self
-        popover.contentViewController = NSHostingController(rootView: MenuPanelView(model: panel))
+        let hosting = NSHostingController(rootView: MenuPanelView(model: panel))
+        // The popover takes the panel's own size, padding included.
+        hosting.sizingOptions = .preferredContentSize
+        popover.contentViewController = hosting
         panel.perform = { [weak self] action in self?.panelAction(action) }
 
         if Engine.isTrusted() {
