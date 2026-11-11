@@ -226,7 +226,7 @@ struct MenuPanelView: View {
     private var controls: some View {
         VStack(spacing: 8) {
             // An invisible heading so the first button lines up with the other columns' first tiles.
-            heading(" ").hidden().accessibilityHidden(true)
+            PanelHeading(title: " ").hidden().accessibilityHidden(true)
             control("gearshape", "Settings…", .settings)
             control("arrow.clockwise", "Re-tile Now", .retile).disabled(!model.enabled)
             control("power", "Quit PaperWM", .quit)

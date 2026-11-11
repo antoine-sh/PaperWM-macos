@@ -67,6 +67,7 @@ struct SettingsView: View {
                             .foregroundStyle(tab == item ? Color.accentColor : Color.primary)
                         Text(item.rawValue).font(.caption)
                     }
+                    .padding(4)
                     .frame(width: 92, height: 52)
                     .tile(selected: tab == item)
                 }
@@ -341,8 +342,8 @@ struct SettingsView: View {
                 Text(recording ? "Press keys…" : combo.wrappedValue.symbol)
                     .font(.system(.body, design: .rounded))
                     .foregroundStyle(recording ? Color.accentColor : Color.primary)
-                    .frame(minWidth: 96, minHeight: 24)
-                    .padding(.horizontal, 6)
+                    .frame(minWidth: 96, minHeight: 22)
+                    .padding(4)
                     .tile(selected: recording)
             }
             .buttonStyle(.plain)
