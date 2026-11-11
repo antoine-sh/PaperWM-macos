@@ -11,25 +11,76 @@ struct SettingsView: View {
     let failed: Set<String>
     @ObservedObject var recorder: ShortcutRecorder
 
+    @State private var tab = Tab.general
     @State private var presetsText = ""
     @FocusState private var presetsFocused: Bool
     /// Read from macOS rather than stored, so it follows changes made in System Settings › Login Items.
     @State private var launchAtLogin = Self.isLaunchAtLogin
 
-    var body: some View {
-        TabView {
-            general.tabItem { Label("General", systemImage: "gearshape") }
-            layout.tabItem { Label("Layout", systemImage: "rectangle.split.3x1") }
-            appearance.tabItem { Label("Appearance", systemImage: "paintbrush") }
-            apps.tabItem { Label("Apps", systemImage: "app.badge") }
-            shortcuts.tabItem { Label("Shortcuts", systemImage: "keyboard") }
+    private enum Tab: String, CaseIterable {
+        case general = "General", layout = "Layout", appearance = "Appearance", apps = "Apps", shortcuts = "Shortcuts"
+
+        var symbol: String {
+            switch self {
+            case .general: "gearshape"
+            case .layout: "rectangle.split.3x1"
+            case .appearance: "paintbrush"
+            case .apps: "app.badge"
+            case .shortcuts: "keyboard"
+            }
         }
-        .formStyle(.grouped)
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            tabBar
+            Divider()
+            Group {
+                switch tab {
+                case .general: general
+                case .layout: layout
+                case .appearance: appearance
+                case .apps: apps
+                case .shortcuts: shortcuts
+                }
+            }
+            .formStyle(.grouped)
+            .scrollContentBackground(.hidden)
+            .toggleStyle(.switch)
+        }
         .frame(width: 620, height: 520)
         .onAppear {
             presetsText = Self.format(settings.values.widthPresets)
             launchAtLogin = Self.isLaunchAtLogin
         }
+    }
+
+    /// The tabs as the menu bar panel's tiles.
+    private var tabBar: some View {
+        HStack(spacing: 8) {
+            ForEach(Tab.allCases, id: \.self) { item in
+                Button { tab = item } label: {
+                    VStack(spacing: 4) {
+                        Image(systemName: item.symbol)
+                            .font(.system(size: 16))
+                            .frame(height: 20)
+                            .foregroundStyle(tab == item ? Color.accentColor : Color.primary)
+                        Text(item.rawValue).font(.caption)
+                    }
+                    .frame(width: 92, height: 52)
+                    .tile(selected: tab == item)
+                }
+                .buttonStyle(.plain)
+                .accessibilityAddTraits(tab == item ? .isSelected : [])
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(16)
+    }
+
+    /// A section footer in the panel's footer style.
+    private func note(_ text: String) -> some View {
+        Text(text).font(.callout).foregroundStyle(.secondary)
     }
 
     /// Still on while it waits for approval in System Settings › Login Items.
@@ -55,6 +106,8 @@ struct SettingsView: View {
                         launchAtLogin = Self.isLaunchAtLogin
                     }
                 ))
+            } header: {
+                PanelHeading(title: "Startup")
             }
         }
     }
@@ -75,13 +128,11 @@ struct SettingsView: View {
                 }
                 Toggle("Keep original height of single windows", isOn: $settings.values.keepOriginalHeight)
             } header: {
-                Text("Columns")
+                PanelHeading(title: "Columns")
             } footer: {
-                Text("Width presets are percentages of the screen, separated by commas.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                note("Width presets are percentages of the screen, separated by commas.")
             }
-            Section("Scrolling") {
+            Section {
                 stepper("Animation", value: $settings.values.animationDuration, in: 0...1, step: 0.05) {
                     $0 < 0.001 ? "Off" : "\(Int(($0 * 1000).rounded())) ms"
                 }
@@ -90,6 +141,8 @@ struct SettingsView: View {
                     Text("When columns overflow").tag(CenterFocus.onOverflow)
                     Text("Always").tag(CenterFocus.always)
                 }
+            } header: {
+                PanelHeading(title: "Scrolling")
             }
         }
     }
@@ -101,37 +154,43 @@ struct SettingsView: View {
 
     private var appearance: some View {
         Form {
-            Section("Focus border") {
+            Section {
                 Toggle("Draw a border around the focused window", isOn: $settings.values.focusBorder)
                 Group {
                     ColorPicker("Color", selection: borderColor, supportsOpacity: false)
                     stepper("Width", value: $settings.values.borderWidth, in: 1...16, step: 1) { "\(Int($0)) pt" }
                 }
                 .disabled(!settings.values.focusBorder)
+            } header: {
+                PanelHeading(title: "Focus border")
             }
-            Section("Dimming") {
+            Section {
                 Toggle("Dim windows behind the focused one", isOn: $settings.values.dimBackground)
                 stepper("Amount", value: $settings.values.dimAmount, in: 0.05...0.8, step: 0.05) { Self.percent($0) }
                     .disabled(!settings.values.dimBackground)
+            } header: {
+                PanelHeading(title: "Dimming")
             }
             Section {
                 stepper("Window corner radius", value: $settings.values.cornerRadius, in: 0...40, step: 1) {
                     "\(Int($0)) pt"
                 }
                 .disabled(!settings.values.focusBorder && !settings.values.dimBackground)
+            } header: {
+                PanelHeading(title: "Corners")
             } footer: {
-                Text(Thumbnails.hasAccess
+                note(Thumbnails.hasAccess
                      ? "Shapes the border and dimming until each window's own corners are measured."
                      : "Shapes the border and dimming. Grant Screen Recording permission to match "
                        + "each window's own corners.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-            Section("Minimap") {
+            Section {
                 Picker("Style", selection: $settings.values.minimapStyle) {
                     Text("Strip").tag(MinimapStyle.strip)
                     Text("App icon toolbar").tag(MinimapStyle.toolbar)
                 }
+            } header: {
+                PanelHeading(title: "Minimap")
             }
         }
     }
@@ -190,12 +249,10 @@ struct SettingsView: View {
                 }
                 .fixedSize()
             } header: {
-                Text("App rules")
+                PanelHeading(title: "App rules")
             } footer: {
-                Text("Floating apps are left where they are, like dialogs. "
+                note("Floating apps are left where they are, like dialogs. "
                      + "An app with a slot opens at that column of its display's strip; you can still move it after.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
         }
     }
@@ -254,8 +311,10 @@ struct SettingsView: View {
     private var shortcuts: some View {
         Form {
             ForEach(HotKey.Category.allCases, id: \.self) { category in
-                Section(category.rawValue) {
+                Section {
                     ForEach(HotKey.defaults.filter { $0.category == category }, id: \.id) { shortcutRow($0) }
+                } header: {
+                    PanelHeading(title: category.rawValue)
                 }
             }
         }
@@ -271,16 +330,30 @@ struct SettingsView: View {
                     .help("Another app uses this shortcut")
             }
             let combo = binding(for: hotKey)
-            Button(recorder.recording == hotKey.id ? "Press keys…" : combo.wrappedValue.symbol) {
-                if recorder.recording == hotKey.id {
+            let recording = recorder.recording == hotKey.id
+            Button {
+                if recording {
                     recorder.stop()
                 } else {
                     recorder.start(hotKey.id) { combo.wrappedValue = $0 }
                 }
+            } label: {
+                Text(recording ? "Press keys…" : combo.wrappedValue.symbol)
+                    .font(.system(.body, design: .rounded))
+                    .foregroundStyle(recording ? Color.accentColor : Color.primary)
+                    .frame(minWidth: 96, minHeight: 24)
+                    .padding(.horizontal, 6)
+                    .tile(selected: recording)
             }
-            .frame(minWidth: 110)
-            Button("Reset") { settings.values.shortcuts[hotKey.id] = nil }
-                .disabled(settings.values.shortcuts[hotKey.id] == nil)
+            .buttonStyle(.plain)
+            .help(recording ? "Press the new shortcut, or Esc to cancel" : "Click to record a new shortcut")
+            Button { settings.values.shortcuts[hotKey.id] = nil } label: {
+                Image(systemName: "arrow.uturn.backward")
+            }
+            .buttonStyle(.borderless)
+            .help("Reset to the default shortcut")
+            .accessibilityLabel("Reset")
+            .disabled(settings.values.shortcuts[hotKey.id] == nil)
         }
     }
 
@@ -412,6 +485,7 @@ final class SettingsWindowController: NSObject, NSWindowDelegate {
             let window = NSWindow(contentViewController: NSHostingController(rootView: view))
             window.title = "PaperWM Settings"
             window.styleMask = [.titled, .closable]
+            window.titlebarAppearsTransparent = true
             window.isReleasedWhenClosed = false
             window.delegate = self
             self.window = window
