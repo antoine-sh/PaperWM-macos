@@ -301,6 +301,13 @@ pub struct Engine {
     animator: Animator,
     /// Each window's height when it was first tiled, for `keep_original_height`.
     original_heights: HashMap<WindowId, f64>,
+    /// Where each window the backend took for closed while it was away was:
+    /// its workspace and the windows left of it, nearest first. Windows
+    /// away through a wake come back that way one app at a time, and would
+    /// otherwise each open right of the focused column, in reverse order.
+    // shortcut: entries of windows that never return are kept; prune them if
+    // that ever shows up in memory.
+    closed_away: HashMap<WindowId, (usize, Vec<WindowId>)>,
 }
 
 impl Engine {
@@ -323,6 +330,7 @@ impl Engine {
             info: HashMap::new(),
             animator: Animator::new(WORKSPACE_COUNT),
             original_heights: HashMap::new(),
+            closed_away: HashMap::new(),
         }
     }
 
@@ -634,6 +642,10 @@ impl Engine {
                 .flat_map(|(c, column)| column.windows().iter().map(move |&id| (c, id)))
                 .filter(|(_, id)| !self.info.contains_key(id))
                 .collect();
+            for &(column, id) in gone.iter().filter(|(_, id)| departed.get(id) == Some(&Departure::Closed)) {
+                let before = workspace.columns()[..column].iter().rev().flat_map(|c| c.windows().iter().copied());
+                self.closed_away.insert(id, (index, before.collect()));
+            }
             for (column, id) in gone {
                 removed(id, format!("ws{index} col{column}"));
                 workspace.remove_window(id);
@@ -657,19 +669,26 @@ impl Engine {
         for (id, frame) in new {
             let app = &self.info[&id].app_name;
             let slot = self.config.rule_for(app).filter(|r| r.action == AppAction::Slot);
-            let monitor = self.monitor_at(frame).unwrap_or(self.active);
-            let index = self.monitors[monitor].workspace;
+            let back = self.closed_away.remove(&id);
+            let shown = |w: usize| self.monitors.iter().position(|m| m.workspace == w);
+            let monitor = back.as_ref().and_then(|b| shown(b.0)).or(self.monitor_at(frame)).unwrap_or(self.active);
+            let index = back.as_ref().map_or(self.monitors[monitor].workspace, |b| b.0);
             let viewport = self.viewport(monitor);
             self.original_heights.entry(id).or_insert(frame.height);
             let ws = &mut self.workspaces[index];
             let kept = keep.entry(index).or_insert(ws.focused_window());
-            match slot {
-                Some(rule) => {
+            match (back, slot) {
+                (Some((_, before)), _) => {
+                    let column = |b: &WindowId| ws.columns().iter().position(|c| c.windows().contains(b));
+                    let at = before.iter().find_map(column).map_or(0, |c| c + 1);
+                    ws.insert_window_at(id, at, frame.width, viewport);
+                }
+                (None, Some(rule)) => {
                     let placed = slotted.entry(app.clone()).or_default();
                     ws.insert_window_at(id, rule.column + *placed, frame.width, viewport);
                     *placed += 1;
                 }
-                None => ws.insert_window(id, frame.width, viewport),
+                (None, None) => ws.insert_window(id, frame.width, viewport),
             }
             let column = ws.columns().iter().position(|c| c.windows().contains(&id)).unwrap_or_default();
             log::line(format!("adopt {id} {app} ws{index} col{column}"));
@@ -2733,6 +2752,30 @@ mod tests {
         backend.hide_app(101, false);
         engine.sync().unwrap();
         assert_eq!(columns(&engine).len(), 3);
+    }
+
+    #[test]
+    fn windows_closed_away_come_back_to_their_place_in_any_order() {
+        let ids = 1..=5;
+        let (mut engine, backend) = engine_with(ids.clone().map(|i| window(i, i as f64 * 100.0, 300.0)).collect());
+        engine.sync().unwrap();
+        backend.set_focused(Some(1));
+        engine.sync().unwrap();
+        // Away so long while waking that the backend takes them for closed.
+        for id in 2..=5 {
+            backend.set_away(id, true);
+            backend.depart(id, Departure::Closed);
+        }
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1]]);
+        // They come back one app at a time, all moved to the same spot.
+        for id in [2, 3, 5, 4] {
+            backend.update(id, |w| w.frame.x = 0.0);
+            backend.set_away(id, false);
+            engine.sync().unwrap();
+        }
+        assert_eq!(columns(&engine), ids.map(|i| vec![i]).collect::<Vec<_>>());
+        assert_eq!(engine.workspace(0).unwrap().focused_window(), Some(1));
     }
 
     #[test]
