@@ -199,6 +199,18 @@ struct SettingsView: View {
                        + "each window's own corners.")
             }
             Section {
+                Picker("Swipe to scroll the strip", selection: $settings.values.swipeFingers) {
+                    Text("Off").tag(0)
+                    Text("Three fingers").tag(3)
+                    Text("Four fingers").tag(4)
+                }
+            } header: {
+                PanelHeading(title: "Trackpad")
+            } footer: {
+                note("Turn off the macOS swipe gestures that use as many fingers in System Settings › Trackpad "
+                     + "› More Gestures, or both will act on the swipe.")
+            }
+            Section {
                 Picker("Style", selection: $settings.values.minimapStyle) {
                     Text("Strip").tag(MinimapStyle.strip)
                     Text("App icon toolbar").tag(MinimapStyle.toolbar)

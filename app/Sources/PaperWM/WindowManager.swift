@@ -207,6 +207,9 @@ final class WindowManager {
             }
         }
         decorations.apply(settings.values)
+        if gestures.swipeFingers != settings.values.swipeFingers {
+            gestures.swipeFingers = settings.values.swipeFingers
+        }
     }
 
     @discardableResult
