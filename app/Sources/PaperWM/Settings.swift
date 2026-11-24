@@ -67,6 +67,8 @@ final class Settings: ObservableObject {
         var dimAmount = 0.3
         var minimapStyle: MinimapStyle = .toolbar
         var appRules: [AppRule] = []
+        /// Fingers of a plain swipe that pans the strip: 3 or 4, or 0 for none.
+        var swipeFingers = 0
 
         init() {}
 
@@ -92,6 +94,7 @@ final class Settings: ObservableObject {
             dimAmount = try c.decodeIfPresent(Double.self, forKey: .dimAmount) ?? defaults.dimAmount
             minimapStyle = try c.decodeIfPresent(MinimapStyle.self, forKey: .minimapStyle) ?? defaults.minimapStyle
             appRules = try c.decodeIfPresent([AppRule].self, forKey: .appRules) ?? defaults.appRules
+            swipeFingers = try c.decodeIfPresent(Int.self, forKey: .swipeFingers) ?? defaults.swipeFingers
         }
     }
 
