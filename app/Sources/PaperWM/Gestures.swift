@@ -121,13 +121,15 @@ final class Gestures {
         let position = CGPoint(x: sum.x / CGFloat(touches.count), y: sum.y / CGFloat(touches.count))
         defer { swipeLast = position }
         guard let last = swipeLast else { return }
-        let dx = position.x - last.x
+        var dx = position.x - last.x
         if swipeHorizontal == nil {
             swipeTravel.x += dx
             swipeTravel.y += position.y - last.y
             // A few percent of the trackpad tells a sideways swipe from Mission Control's.
             guard max(abs(swipeTravel.x), abs(swipeTravel.y)) > 0.03 else { return }
             swipeHorizontal = abs(swipeTravel.x) > abs(swipeTravel.y)
+            // Catch up on the travel so far, so the strip stays under the fingers.
+            dx = swipeTravel.x
         }
         guard swipeHorizontal == true, dx != 0, let width = NSScreen.main?.frame.width else { return }
         // The strip follows the fingers: the trackpad's width pans one screen.
