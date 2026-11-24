@@ -560,8 +560,7 @@ impl Engine {
         let mut reasons: HashMap<WindowId, String> =
             windows.iter().filter(|w| w.is_minimized).map(|w| (w.id, "minimized".into())).collect();
         reasons.extend(departed.iter().map(|(&id, why)| (id, why.to_string())));
-        // Background tabs count as read: the tab now shown takes their place.
-        let read: HashSet<WindowId> = windows.iter().flat_map(|w| w.tabs.iter().copied().chain([w.id])).collect();
+        let read: HashSet<WindowId> = windows.iter().map(|w| w.id).collect();
         // Held windows that stopped being tileable without being minimized
         // are kept here to be released below.
         let mut current: HashMap<WindowId, WindowInfo> = windows
@@ -569,6 +568,10 @@ impl Engine {
             .filter(|w| w.is_tileable() || (!w.is_minimized && self.info.contains_key(&w.id)))
             .map(|w| (w.id, w))
             .collect();
+        // Background tabs count as read: the tab now shown takes their place.
+        // Not those of a new tab dropped above, such as one read before it has
+        // its subrole: nothing would take their place.
+        let read: HashSet<WindowId> = read.into_iter().chain(current.values().flat_map(|w| w.tabs.clone())).collect();
         // Windows whose frame was just read, as opposed to kept from before.
         let fresh: HashSet<WindowId> = current.keys().copied().collect();
         for (&id, info) in &self.info {
@@ -1488,6 +1491,26 @@ mod tests {
         assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![4]]);
         assert_eq!(backend.frame_of(3), Some(column));
         assert_eq!(engine.state().focused_window, Some(3));
+    }
+
+    #[test]
+    fn new_tab_read_before_its_subrole_keeps_the_group_column() {
+        let windows = vec![window(1, 0.0, 300.0), window(2, 400.0, 500.0), window(4, 950.0, 200.0)];
+        let (mut engine, backend) = engine_with(windows);
+        engine.sync().unwrap();
+        backend.set_focused(Some(2));
+        engine.sync().unwrap();
+
+        // Like Finder's Cmd-T: the new tab is shown before it has its subrole.
+        backend.add_tab(2, 3);
+        backend.update(3, |w| w.is_standard = false);
+        backend.set_focused(Some(3));
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![2], vec![4]]);
+
+        backend.update(3, |w| w.is_standard = true);
+        engine.sync().unwrap();
+        assert_eq!(columns(&engine), vec![vec![1], vec![3], vec![4]]);
     }
 
     #[test]
